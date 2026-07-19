@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-19
+
 ### Added
 
 - Initial extraction script (`extract_agent_config.py`) that converts Martin Wimpress's `nix-config` agent configuration into portable directory trees for OpenCode, Claude Code, Codex CLI, Pi Agent, Zed, Cursor, and Paseo.

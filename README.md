@@ -1,8 +1,12 @@
 # Agent Config Extractor
 
+[![Tests](https://github.com/bigcalm/wimpysworld-nix-config-agents/actions/workflows/test.yml/badge.svg)](https://github.com/bigcalm/wimpysworld-nix-config-agents/actions/workflows/test.yml)
+
 Extracts AI TUI agent configurations from [Martin Wimpress' nix-config repo](https://github.com/wimpysworld/nix-config.git)
 into portable directory trees that can be copied into each agent's config directory
 on any Linux/macOS system (no Nix required).
+
+Source: https://github.com/bigcalm/wimpysworld-nix-config-agents
 
 ## Usage
 
