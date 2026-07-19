@@ -1,0 +1,3 @@
+permission:
+  task: deny
+  question: allow

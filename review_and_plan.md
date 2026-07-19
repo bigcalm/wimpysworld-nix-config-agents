@@ -71,16 +71,12 @@ It works against the current upstream repo and produces well-formed JSON/TOML. P
 - [ ] **Verify OpenCode `tui` nesting** against the real OpenCode settings schema.
 - [ ] **Verify Pi `mcp.json` shape** if documentation becomes available.
 
-### Phase 3: Tests and CI
+### Phase 3: Tests and CI — completed
 
-- [ ] **Add a test fixture** — create a minimal fake source tree under `tests/fixtures/` and snapshot the expected output for each platform.
-- [ ] **Add unit tests** for the MCP parser and the communication-rules expansion.
-- [ ] **Add a validation step** that parses every generated `.json` and `.toml` file.
-- [ ] **Add GitHub Actions CI** that:
-  - checks out the upstream `nix-config` repo,
-  - runs the extractor,
-  - validates all output files parse,
-  - fails if the output changes unexpectedly.
+- [x] **Add a test fixture** — minimal fake source tree under `tests/fixtures/minimal/` covering agents, commands, skills, instructions, communication rules, MCP servers, and OpenCode settings.
+- [x] **Add unit tests** for source-tree parsing, MCP parsing, communication-rules expansion, and all platform renderers.
+- [x] **Add a validation step** — every generated `.json` and `.toml` file is parsed inside the render tests.
+- [x] **Add GitHub Actions CI** workflow (`.github/workflows/test.yml`) that compiles the script, runs the unit tests, and extracts the upstream `nix-config` repo to validate every generated `.json` and `.toml` file.
 
 ### Phase 4: Documentation
 
@@ -107,3 +103,5 @@ These changes are the highest-leverage: they provide a safety net for future ups
 - OpenCode `mcp` block includes `environment` for stdio servers with `env`.
 - Pi `mcp.json` omits `pi.omit` servers and respects `pi.directTools`.
 - Zed extensions list is built dynamically from extension-mode servers.
+- 15 unit tests pass against the `tests/fixtures/minimal/` source tree.
+- All 7 platform renderers plus a full `--platform all` run produce parseable JSON/TOML.

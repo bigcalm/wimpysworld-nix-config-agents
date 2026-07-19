@@ -387,16 +387,18 @@ class SourceTree:
             if url:
                 s["url"] = url
 
-            cmd_m = re.search(r'command\s*=\s*(?:lib\.getExe\s+)?([^;\s]+)', et)
+            cmd_m = re.search(r'command\s*=\s*(?:lib\.getExe\s+)?([^;\n]+);', et)
             if cmd_m:
-                cmd_raw = cmd_m.group(1).rstrip(";")
+                cmd_raw = cmd_m.group(1).strip()
                 pkg_m = re.match(r'config\.programs\.(\w+)\.package', cmd_raw)
                 if pkg_m:
                     s["command_ref"] = f"{pkg_m.group(1)}"
                 elif cmd_raw.startswith("mcpNixosNoUpdateCheck"):
                     s["command_ref"] = "mcp-nixos"
+                elif cmd_raw.startswith("playwrightMcpWithNixBrowser"):
+                    s["command_ref"] = "playwright-mcp"
                 else:
-                    s["command_ref"] = cmd_raw
+                    s["command_ref"] = _parse_value(cmd_raw)
 
             args = extract_args(et)
             if args:
