@@ -34,6 +34,16 @@ python3 extract_agent_config.py /path/to/nix-config --output ~/my-configs
 | **cursor** | global rules, communication rules | `.cursor/rules/` |
 | **paseo** | config template | `~/.paseo/config.json` |
 
+## Tests
+
+The repository includes a minimal fixture source tree and a unit-test suite:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+A GitHub Actions workflow runs the tests and validates the generated output against the upstream `nix-config` repo on every push and pull request.
+
 ## Requirements
 
 - Python 3.8+
@@ -41,4 +51,4 @@ python3 extract_agent_config.py /path/to/nix-config --output ~/my-configs
 
 ## Licence
 
-MIT
+This project is released under the MIT licence.
