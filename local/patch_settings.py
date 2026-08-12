@@ -26,8 +26,11 @@ def patch_settings(opencode_dir: Path):
 
     rules = settings.get("rules", "")
 
-    # Check if already patched
-    if "For GitLab, load the `glab` skill" in rules:
+    # Check if already patched (both markers must be present)
+    if (
+        "For GitLab, load the `glab` skill" in rules
+        and "Keep GitLab mutations on named, authorised paths." in rules
+    ):
         print("patch_settings: rules already contain glab references, skipping")
         return
 
@@ -50,7 +53,15 @@ def patch_settings(opencode_dir: Path):
         "For reads, prefer the constrained CLI path when available: "
         "use a dedicated `gh` or `glab` subcommand first, then `gh-api-safe` or `glab-api-safe` for raw REST or GraphQL reads."
     )
-    rules = rules.replace(old_tool, new_tool)
+    patched_tool = rules.replace(old_tool, new_tool)
+    if patched_tool == rules:
+        print(
+            "patch_settings: GitHub tool paragraph drifted from expected wording; "
+            "refusing to patch silently. Update old_tool in patch_settings.py.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    rules = patched_tool
 
     # Find the end of the GitHub fence paragraph and insert GitLab fence after it
     github_fence_start = rules.find(github_fence_line)
@@ -64,7 +75,7 @@ def patch_settings(opencode_dir: Path):
         "Keep GitLab mutations on named, authorised paths. Coding agents run fenced. "
         "Raw `glab api` stays denied. Fence permits the everyday mutations: "
         "`git push`, `glab mr comment`, `glab mr approve`, `glab mr create`, "
-        "`glab issue create`, `glab issue edit`, `glab ci retry`, and `glab mr merge`. "
+        "`glab issue create`, `glab issue update`, `glab ci retry`, and `glab mr merge`. "
         "Run them when the task calls for them. "
         "Fence-denied commands (`glab repo create`, `glab repo edit`, `glab config`, `glab auth`) "
         "are output for the operator to run unfenced."

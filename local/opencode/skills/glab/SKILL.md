@@ -10,7 +10,7 @@ user-invocable: true
 
 Coding agents run fenced. Fence permits the everyday mutations:
 `git push`, `glab mr comment`, `glab mr approve`, `glab mr create`,
-`glab issue create`, `glab issue edit`, `glab ci retry`,
+`glab issue create`, `glab issue update`, `glab ci retry`,
 and `glab mr merge`. Invoking a command that names a mutation
 is the consent for that mutation, so run it rather than asking again.
 
@@ -21,13 +21,13 @@ those for the operator to run in an unfenced shell. Raw reads go through
 
 ## Body text policy
 
-Every command below that carries a `--description` or `--description-file`
+Every command below that carries a `-d`/`--description` or `-m`/`--message`
 publishes under the user's name. Load the `contribution-voice` skill and follow it
 before writing that text. It governs the structure: length, layout,
 sign-offs, and the cut pass.
 
-This covers `glab mr create`, `glab mr comment`, `glab mr approve`,
-`glab issue create`, and `glab issue comment`.
+This covers `glab mr create`, `glab mr note`, `glab issue create`,
+and `glab issue note`.
 
 Prefer the dedicated commands where one fits. Reach for a bare `glab` call
 only when no command covers the case.
@@ -37,7 +37,7 @@ only when no command covers the case.
 ```bash
 # List
 glab mr list
-glab mr list --state merged --per-page 10
+glab mr list -M --per-page 10                                            # merged MRs
 glab mr list --assignee @me
 
 # View
@@ -51,20 +51,20 @@ glab mr create --title "feat: add X" --description "..." --draft
 glab mr create --target-branch main --reviewer alice,bob --label "needs-review"
 
 # Merge
-glab mr merge 123 --squash --delete-source-branch
-glab mr merge 123 --when-pipeline-succeeds                            # merge once CI passes
+glab mr merge 123 --squash --remove-source-branch
+glab mr merge 123 --auto-merge                                         # merge once CI passes
 
 # Approve & comment
-glab mr approve 123 --body "LGTM"
+glab mr approve 123
 glab mr unapprove 123
-glab mr comment 123 --body "Please fix X"
+glab mr note 123 -m "Please fix X"                                     # note/comment; also `glab mr comment`
 
 # CI status
-glab mr ci-status 123
-glab mr ci-status 123 --watch                                         # stream until complete
+glab ci status                                                         # pipeline status for current branch
+glab ci status -b main --live                                          # stream until complete
 
 # Edit
-glab mr update 123 --add-label "bug" --add-reviewer charlie
+glab mr update 123 --label "bug" --reviewer charlie
 glab mr update 123 --target-branch develop --title "Updated title"
 
 # Other
@@ -81,7 +81,7 @@ glab mr close 123
 ```bash
 # List
 glab issue list
-glab issue list --assignee @me --state open
+glab issue list --assignee @me                                        # open issues (default)
 glab issue list --label "bug"
 
 # View
@@ -93,10 +93,10 @@ glab issue view 456 --web
 glab issue create --title "Bug: X fails" --description "Steps..." --label "bug" --assignee @me
 
 # Manage
-glab issue update 456 --add-label "priority" --milestone "v2.0"
+glab issue update 456 --label "priority" --milestone "v2.0"
 glab issue close 456
 glab issue reopen 456
-glab issue comment 456 --body "Fixed in !123"
+glab issue note 456 -m "Fixed in !123"                                # note/comment; also `glab issue comment`
 glab issue subscribe 456
 glab issue unsubscribe 456
 ```
@@ -106,37 +106,35 @@ glab issue unsubscribe 456
 ```bash
 # List pipelines
 glab ci list
-glab ci list --branch main --per-page 5
-glab ci list --pipeline-id 12345678
+glab ci list -r main --per-page 5                                      # by ref
+glab ci view -p 12345678                                               # one pipeline by id
 
 # View a pipeline
 glab ci view 12345678
 glab ci view 12345678 --web
 
-# Pipeline logs
-glab ci trace 12345678                                                # live log tail
-glab ci view 12345678 --log                                           # full log
-glab ci view 12345678 --job "test"                                    # specific job
+# Job logs
+glab ci trace <job-id>                                                  # live log tail for a job
+glab ci view                                                           # interactive job/trace browser
 
 # Retry / cancel
 glab ci retry 12345678
 glab ci cancel 12345678
 
 # Trigger pipeline
-glab ci run --ref main
-glab ci run --ref main --variable "ENV=staging"
+glab ci run -b main
+glab ci run -b main --variables-env "ENV=staging"
 
 # Download artifacts
-glab ci artifacts 12345678
-glab ci artifacts 12345678 --job "build"
+glab job artifact main build                                           # artifacts of job `build` on ref `main`
 ```
 
 ## Releases
 
 ```bash
 # Create
-glab release create v1.2.3 --notes "Fixes #123"
-glab release create v1.2.3 --description "Release notes" --assets dist/*.tar.gz
+glab release create v1.2.3 -N "Fixes #123"
+glab release create v1.2.3 -N "Release notes" dist/*.tar.gz
 
 # List / view / download
 glab release list
@@ -156,18 +154,18 @@ glab repo clone owner/repo
 glab repo fork owner/repo --clone
 
 # Cross-project flag (works on most commands)
-glab mr list -g owner/other-repo
+glab mr list -R owner/other-repo
 ```
 
 ## Search
 
 ```bash
 # Projects
-glab search repo "nix config"
+glab repo search --search "nix config"
 
 # Issues and MRs
-glab search issue "memory leak" --repo owner/repo --state open
-glab search mr "fix authentication" --author alice --state merged
+glab issue list --search "memory leak" -R owner/repo
+glab mr list --search "fix authentication" --author alice
 ```
 
 ## Raw API
@@ -187,7 +185,7 @@ command for the operator to run in an unfenced shell.
 
 `glab-api-safe` wraps `glab api`, enforces a read-only allow-list with a
 defence-in-depth deny-list on the REST path, blocks
-`-X`/`--method`/`-f`/`-F`/`--field`/`--raw-field`/`--input` (except `query=` value under `graphql`, where `@file` is still rejected), and runs a
+`-X`/`--method` (including glued forms such as `-XPOST`)/`--hostname`/`-f`/`-F`/`--field`/`--raw-field`/`--input` (except `query=` value under `graphql`, where `@file` is still rejected), and runs a
 best-effort GraphQL heuristic that rejects any query whose body contains
 a surviving `mutation` or `subscription` keyword after comments and
 string literals have been stripped. The heuristic is not a real GraphQL
@@ -201,18 +199,18 @@ Placeholders `{owner}`, `{repo}`, `{branch}` are replaced from current
 git context. Default method is GET.
 
 ```bash
-# GET with jq
+# GET piped into jq
 glab-api-safe projects/{owner}%2F{repo}/pipelines \
-  --jq '.[:5] | .[] | {id, status, ref}'
+  | jq '.[:5] | .[] | {id, status, ref}'
 
 # Paginate all results
-glab-api-safe projects/{owner}%2F{repo}/issues --paginate --jq '.[].title'
+glab-api-safe projects/{owner}%2F{repo}/issues --paginate | jq '.[].title'
 
 # GraphQL (heuristic-screened; mutations and subscriptions are rejected)
 glab-api-safe graphql -f query='{ currentUser { username } }'
 
-# Notifications (read only)
-glab-api-safe events --jq '.[] | {action_name, target_type}'
+# Events (read only)
+glab-api-safe events | jq '.[] | {action_name, target_type}'
 ```
 
 ### Unsafe: requires unfenced shell
@@ -234,25 +232,25 @@ glab api projects/{owner}%2F{repo}/issues -F title="Bug" -F description=@issue.m
 
 ## JSON Output Pattern
 
-Most commands accept `--json fields` with optional `--jq expression`:
+List and view commands accept `-F json` (or `--output json`), then pipe
+into `jq`:
 
 ```bash
-# Named fields only
-glab mr list --json iid,title,state,source_branch
-glab ci list --json id,status,ref,sha
+# JSON output piped to jq
+glab mr list -F json | jq '.[] | {iid, title, state, source_branch}'
+glab ci list -F json | jq '.[] | {id, status, ref, sha}'
 
 # Filter inline
-glab mr list --json iid,title,state \
-  --jq '.[] | select(.state == "opened") | .iid'
+glab mr list -F json | jq '.[] | select(.state == "opened") | .iid'
 
 # Combine with jq outside glab for complex transforms
-glab issue list --json iid,title,labels | jq '.[] | select(.labels | any(.name == "bug"))'
+glab issue list -F json | jq '.[] | select(.labels | any(.name == "bug"))'
 ```
 
 ## Status & Auth
 
 ```bash
 glab auth status             # active account, token scopes, host
-glab auth token              # allowed under Fence; never echo the value
+glab auth status -t          # shows the token; allowed under Fence, never echo the value
 # `glab auth login` and `glab auth logout` stay denied.
 ```

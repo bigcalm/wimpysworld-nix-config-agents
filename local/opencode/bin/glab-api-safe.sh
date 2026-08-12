@@ -10,12 +10,14 @@
 # own flags is rejected.
 #
 # Policy summary:
-#   * Argv pre-check rejects -X/--method, -f/--field, -F/--raw-field, and
-#     --input on every token. The only exception is `-f query=...` (or
-#     -F/--field/--raw-field with `query=`) when the endpoint is `graphql`.
+#   * Argv pre-check rejects -X/--method (including glued forms such as
+#     -XPOST), --hostname, -f/--field, -F/--raw-field, and --input on every
+#     token. The only exception is `-f query=...` (or -F/--field/--raw-field
+#     with `query=`) when the endpoint is `graphql`.
 #   * REST endpoints must match an allow-list. A deny-list overrides the
-#     allow-list and rejects credential, admin, secrets, runner, and
-#     personal-access-token endpoints.
+#     allow-list and rejects credential, admin, secrets, runner,
+#     personal-access-token, access-token, deploy-token, and support-PIN
+#     endpoints.
 #   * GraphQL queries are parsed best-effort (comments and string literals
 #     stripped) and rejected if a `mutation` or `subscription` keyword
 #     survives. This is a heuristic, not a real GraphQL parser; aliased
@@ -42,10 +44,11 @@ USAGE
     glab-api-safe --help
 
 POLICY
-    Argv pre-check rejects -X/--method, -f/--field, -F/--raw-field, and
-    --input on every token. The exception is `-f query=...` (or the
-    equivalent -F/--field/--raw-field forms) when the endpoint is
-    `graphql`, so read-only GraphQL queries remain usable.
+    Argv pre-check rejects -X/--method (including glued forms such as
+    -XPOST), --hostname, -f/--field, -F/--raw-field, and --input on every
+    token. The exception is `-f query=...` (or the equivalent
+    -F/--field/--raw-field forms) when the endpoint is `graphql`, so
+    read-only GraphQL queries remain usable.
 
     REST endpoints must match an allow-list: projects, projects/*, groups,
     groups/*, user, user/*, users/*, namespaces, namespaces/*, search,
@@ -54,7 +57,8 @@ POLICY
 
     A deny-list overrides the allow-list and rejects admin/*,
     personal_access_tokens, runners, applications, */variables, */secrets,
-    and */runners paths.
+    */runners, */access_tokens, */deploy_tokens, user/support_pin, and the
+    user credential surface (user/emails, user/keys, user/gpg_keys).
 
     GraphQL: the query value is stripped of `#` comments and `"..."` /
     `"""..."""` string literals, then rejected if a `mutation` or
@@ -153,6 +157,9 @@ while [[ ${j} -lt ${nargs} ]]; do
 	--method=*)
 		die "method override (--method=) is not permitted"
 		;;
+	--hostname | --hostname=*)
+		die "--hostname is not permitted (token exfiltration risk)"
+		;;
 	-f | -F | --field | --raw-field)
 		j=$((j + 1))
 		if [[ ${j} -ge ${nargs} ]]; then
@@ -176,7 +183,7 @@ while [[ ${j} -lt ${nargs} ]]; do
 			die "${flag}= is only permitted as 'query=' for the graphql endpoint"
 		fi
 		;;
-	-f* | -F*)
+	-f* | -F* | -X*)
 		die "glued ${tok:0:2} short flags are not supported by glab-api-safe"
 		;;
 	esac
@@ -231,6 +238,18 @@ if [[ ${is_graphql} -eq 0 ]]; then
 		;;
 	*/runners | */runners/*)
 		die "endpoint '${endpoint}' is on the REST deny-list (project/group runners)"
+		;;
+	*/access_tokens | */access_tokens/*)
+		die "endpoint '${endpoint}' is on the REST deny-list (access tokens)"
+		;;
+	*/deploy_tokens | */deploy_tokens/*)
+		die "endpoint '${endpoint}' is on the REST deny-list (deploy tokens)"
+		;;
+	user/support_pin | user/support_pin/*)
+		die "endpoint '${endpoint}' is on the REST deny-list (support PIN)"
+		;;
+	user/emails | user/emails/* | user/keys | user/keys/* | user/gpg_keys | user/gpg_keys/*)
+		die "endpoint '${endpoint}' is on the REST deny-list (user credential surface)"
 		;;
 	esac
 fi

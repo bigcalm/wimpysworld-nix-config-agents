@@ -66,9 +66,12 @@ rsync -a --update "${LOCAL_DIR}/opencode/" "${OPENCODE_DIR}/"
 # glab-api-safe comes from local/, gh-api-safe comes from the nix-config source
 echo "apply_local_overlay: installing bin wrappers to ~/.local/bin/"
 install -Dm755 "${GH_API_SAFE_SRC}" "${HOME}/.local/bin/gh-api-safe"
-if [[ -f "${LOCAL_DIR}/opencode/bin/glab-api-safe.sh" ]]; then
-    install -Dm755 "${LOCAL_DIR}/opencode/bin/glab-api-safe.sh" "${HOME}/.local/bin/glab-api-safe"
+GLAB_API_SAFE_SRC="${LOCAL_DIR}/opencode/bin/glab-api-safe.sh"
+if [[ ! -f "${GLAB_API_SAFE_SRC}" ]]; then
+    echo "apply_local_overlay: glab-api-safe.sh not found at ${GLAB_API_SAFE_SRC}" >&2
+    exit 1
 fi
+install -Dm755 "${GLAB_API_SAFE_SRC}" "${HOME}/.local/bin/glab-api-safe"
 
 # Patch settings.json
 echo "apply_local_overlay: patching settings.json"
