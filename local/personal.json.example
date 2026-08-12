@@ -1,0 +1,24 @@
+{
+  "mcp": {
+    "private-mcp": {
+      "type": "remote",
+      "url": "https://mcp.example.com/mcp",
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer {env:PRIVATE_MCP_TOKEN}"
+      }
+    },
+    "context7": {
+      "enabled": false
+    },
+    "linear": {
+      "enabled": false
+    },
+    "slack": {
+      "enabled": false
+    },
+    "exa": {
+      "enabled": false
+    }
+  }
+}

@@ -52,7 +52,10 @@ local/
 ├── opencode/
 │   ├── bin/                  # gh-api-safe.sh and glab-api-safe.sh wrappers
 │   └── skills/glab/          # extra skill not in the Nix source
-└── patch_agents_md.py        # idempotent patch for AGENTS.md rules
+├── patch_agents_md.py        # idempotent patch for AGENTS.md rules
+├── merge_personal.py         # deep-merge of personal.json into opencode.json
+├── personal.json.example     # template for the git-ignored personal file
+└── personal.json             # your settings (git-ignored; see below)
 ```
 
 Both wrappers are reviewed copies living in `local/opencode/bin/` (the
@@ -60,6 +63,13 @@ glab wrapper is local-only; `gh-api-safe.sh` is a copy of the nix-config
 wrapper with an added `--hostname` deny, kept in sync by hand). The
 overlay script installs both to `~/.local/bin/` (without `.sh` extension)
 so they are on `$PATH`, and refuses symlink sources.
+
+Personal, machine-specific settings (a private MCP server, tokens, model
+overrides) live in the git-ignored `local/personal.json`. `apply_local_overlay.sh`
+deep-merges it into `opencode/opencode.json` after the rsync merge and rules
+patch, so personal keys win on conflicts while nested objects like `mcp`
+combine. Copy `local/personal.json.example` to start; any valid opencode.json
+field can be added or overridden. It is idempotent.
 
 ## Conventions
 

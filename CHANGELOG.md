@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the permission map.
 - Behavioural test suites for both API wrappers, the overlay script, and
   `patch_agents_md.py`.
+- Personal settings file `local/personal.json` (git-ignored) that the
+  overlay deep-merges into `opencode.json`, so machine-specific settings
+  such as a private MCP server survive extraction without touching tracked
+  files.
 
 ### Fixed
 
@@ -39,6 +43,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `local/patch_settings.py` renamed to `local/patch_agents_md.py` and now
   patches the `AGENTS.md` rules file instead of the inert `settings.json`
   `rules` field.
+- The overlay also deep-merges the git-ignored `local/personal.json` into
+  `opencode.json`, so personal overrides win after the rsync merge and rules
+  patch.
+- `$`-prefixed keys (such as `$comment`) are stripped by the personal merge
+  so they never reach `opencode.json`.
+- The overlay refuses to write into an in-repo target that git does not
+  ignore, and warns when an explicitly supplied personal file is missing.
+- `merge_personal.py` and `patch_agents_md.py` write their outputs
+  atomically (temp file + `os.replace`).
 - Extractor no longer breaks on Nix comments and strings containing braces,
   quoted keys, `lib.mkDefault`-wrapped values, or `''...''` indented strings.
 - Communication rules now load from the real source path
