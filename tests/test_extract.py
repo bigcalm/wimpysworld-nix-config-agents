@@ -131,6 +131,44 @@ class TestRenderers(unittest.TestCase):
         self.assertTrue((out / "commands" / "create-skill.md").exists())
         self.assertTrue((out / "skills" / "write-skill" / "SKILL.md").exists())
 
+    def test_opencode_tui_and_init(self):
+        out = e.render_opencode(self.tree, self.tmp, quiet=True)
+        settings = json.loads((out / "settings.json").read_text())
+        tui = json.loads((out / "tui.json").read_text())
+
+        # tui and keybinds moved out of settings.json into tui.json.
+        self.assertNotIn("tui", settings)
+        self.assertNotIn("keybinds", settings)
+        self.assertEqual(tui["tui"]["diff_style"], "stacked")
+        self.assertEqual(tui["keybinds"]["app_exit"], "ctrl+d")
+        self.assertEqual(tui["keybinds"]["input_submit"], "return")
+        # /init carries the template read from the rosey command.
+        init = settings["command"]["init"]
+        self.assertEqual(init["agent"], "rosey")
+        self.assertIn("AGENTS.md", init["template"])
+
+    def test_opencode_permission_denies(self):
+        out = e.render_opencode(self.tree, self.tmp, quiet=True)
+        settings = json.loads((out / "settings.json").read_text())
+        permission = settings["permission"]
+        self.assertEqual(permission["webfetch"], "deny")
+        self.assertEqual(permission["slack_slack_send_message"], "deny")
+        self.assertEqual(permission["slack_slack_update_canvas"], "deny")
+        self.assertNotIn("exa_", " ".join(permission))
+
+    def test_opencode_rules_carry_house_style(self):
+        out = e.render_opencode(self.tree, self.tmp, quiet=True)
+        settings = json.loads((out / "settings.json").read_text())
+        rules = settings["rules"]
+        self.assertTrue(rules.startswith("---"))
+        self.assertEqual(rules.count("short sentences"), 1)
+
+    def test_plugin_copy_skips_template_tokens(self):
+        out = e.render_opencode(self.tree, self.tmp, quiet=True)
+        plugins = out / "plugins"
+        self.assertTrue((plugins / "safe-plugin.js").exists())
+        self.assertFalse((plugins / "token-plugin.js").exists())
+
     def test_claude_output(self):
         out = e.render_claude(self.tree, self.tmp)
         mcp = json.loads((out / "mcp" / "mcp.json").read_text())
@@ -140,17 +178,44 @@ class TestRenderers(unittest.TestCase):
         self.assertEqual(mcp["mcpServers"]["context7"]["type"], "http")
         self.assertTrue((out / "rules" / "instructions.md").exists())
 
+    def test_claude_output_style(self):
+        out = e.render_claude(self.tree, self.tmp)
+        style = (out / "output-styles" / "house-style.md").read_text()
+        self.assertTrue(style.startswith("---"))
+        self.assertIn("short sentences", style)
+
     def test_codex_output(self):
         out = e.render_codex(self.tree, self.tmp)
-        mcp = tomllib.loads((out / "mcp_servers.toml").read_text())
-        self.assertEqual(mcp["mcp_servers"]["context7"]["startup_timeout_sec"], 10)
-        self.assertEqual(mcp["mcp_servers"]["linear"]["default_tools_approval_mode"], "prompt")
-        self.assertEqual(mcp["mcp_servers"]["playwright"]["command"], "playwright-mcp")
-        self.assertEqual(mcp["mcp_servers"]["mcpGoogleCse"]["command"], "${pkgs.uv}/bin/uvx")
-        slack = mcp["mcp_servers"]["slack"]
+        cfg = tomllib.loads((out / "config.toml").read_text())
+        mcp = cfg["mcp_servers"]
+        self.assertEqual(mcp["context7"]["startup_timeout_sec"], 10)
+        self.assertEqual(mcp["linear"]["default_tools_approval_mode"], "prompt")
+        self.assertEqual(mcp["playwright"]["command"], "playwright-mcp")
+        self.assertEqual(mcp["mcpGoogleCse"]["command"], "${pkgs.uv}/bin/uvx")
+        slack = mcp["slack"]
         self.assertEqual(slack["disabled_tools"], ["slack_send_message", "slack_update_canvas"])
         self.assertEqual(slack["oauth"]["client_id"], "12345")
+        self.assertEqual(cfg["approval_policy"], "never")
+        self.assertEqual(cfg["model"], "gpt-5.6-sol")
+        self.assertIn("short sentences", cfg["developer_instructions"])
         self.assertTrue((out / "agents" / "brain.toml").exists())
+
+    def test_codex_command_skill_sidecar(self):
+        out = e.render_codex(self.tree, self.tmp)
+        # allow-implicit-invocation in header.codex.toml emits openai.yaml.
+        yaml = (out / "skills" / "create-skill" / "agents" / "openai.yaml").read_text()
+        self.assertIn("allow_implicit_invocation: false", yaml)
+        # Raw TOML must not land inside the SKILL.md frontmatter.
+        skill = (out / "skills" / "create-skill" / "SKILL.md").read_text()
+        self.assertNotIn("allow-implicit-invocation", skill)
+
+    def test_codex_spawn_agent_opt_out(self):
+        out = e.render_codex(self.tree, self.tmp)
+        # review-tests sets spawn-agent = false: the owning agent's persona
+        # is embedded and no spawn_agent prelude is written.
+        skill = (out / "skills" / "review-tests" / "SKILL.md").read_text()
+        self.assertIn("Expert test engineer", skill)
+        self.assertNotIn("spawn_agent", skill)
 
     def test_pi_output(self):
         out = e.render_pi(self.tree, self.tmp)
@@ -161,11 +226,47 @@ class TestRenderers(unittest.TestCase):
         self.assertEqual(mcp["mcpGoogleCse"]["env"]["API_KEY"], "${GOOGLE_CSE_API_KEY}")
         self.assertEqual(mcp["context7"]["headers"]["Authorization"], "Bearer ${CONTEXT7_API_KEY}")
 
+    def test_pi_oauth_and_house_style(self):
+        out = e.render_pi(self.tree, self.tmp)
+        mcp = json.loads((out / "mcp.json").read_text())
+        self.assertEqual(mcp["exa"]["oauth"]["clientId"], "exa-456")
+        self.assertEqual(mcp["exa"]["oauth"]["redirectUri"], "http://localhost:3001/callback")
+        agents_md = (out / "AGENTS.md").read_text()
+        self.assertEqual(agents_md.count("short sentences"), 1)
+
+    def test_pi_agent_prompt_subagent_tool(self):
+        out = e.render_pi(self.tree, self.tmp)
+        agent = (out / "agents" / "brain.md").read_text()
+        self.assertNotIn("Task tool", agent)
+
     def test_zed_output(self):
         out = e.render_zed(self.tree, self.tmp)
         snippet = json.loads((out / "zed-settings-snippet.json").read_text())
         self.assertEqual(snippet["extensions"], ["mcp-server-context7"])
         self.assertNotIn("context7", snippet["context_servers"])
+        self.assertIn("mcpGoogleCse", snippet["context_servers"])
+        self.assertTrue((out / "zed-keymap-snippet.json").exists())
+
+    def test_paseo_output(self):
+        out = e.render_paseo(self.tree, self.tmp)
+        config = json.loads((out / "config.json").read_text())
+        providers = config["agents"]["providers"]
+        self.assertEqual(
+            sorted(providers),
+            ["claude", "codex", "opencode", "pi"],
+        )
+        self.assertEqual(providers["claude"]["command"], ["claude"])
+        self.assertTrue(config["worktrees"]["root"].startswith("/"))
+        self.assertEqual(config["features"]["voiceMode"]["enabled"], False)
+
+    def test_delegate_task_content(self):
+        out = e.render_claude(self.tree, self.tmp)
+        skill = (out / "skills" / "delegate-task" / "SKILL.md").read_text()
+        self.assertIn("## Waiting", skill)
+        self.assertIn("## Teardown", skill)
+        self.assertIn("Authority: <external mutations", skill)
+        self.assertIn("Deadline: <hard stop", skill)
+        self.assertIn("## Agents", skill)
 
     def test_cursor_output(self):
         out = e.render_cursor(self.tree, self.tmp)
@@ -217,6 +318,32 @@ class TestFullExtraction(unittest.TestCase):
             settings = json.loads((out / "opencode" / "settings.json").read_text())
             self.assertTrue(settings["rules"].startswith("---"))
             self.assertGreater(len(settings["rules"]), 100)
+        finally:
+            shutil.rmtree(out)
+
+    def test_readme_deployment_commands_are_valid(self):
+        out = Path(tempfile.mkdtemp(prefix="extract-test-"))
+        try:
+            with patch.object(sys, "argv", ["extract_agent_config.py", str(FIXTURE), "--output", str(out), "--platform", "all", "--quiet"]):
+                e.main()
+            readme = (out / "README.md").read_text()
+            # File targets get cp, not cp -r: `cp -r dir/* file` fails.
+            self.assertIn(f"cp {out}/zed/zed-settings-snippet.json ~/.config/zed/settings.json", readme)
+            self.assertIn(f"cp {out}/paseo/config.json ~/.paseo/config.json", readme)
+            self.assertIn(f"cp -r {out}/opencode/* ~/.config/opencode", readme)
+        finally:
+            shutil.rmtree(out)
+
+    def test_subset_run_removes_stale_platform_dirs(self):
+        out = Path(tempfile.mkdtemp(prefix="extract-test-"))
+        try:
+            with patch.object(sys, "argv", ["extract_agent_config.py", str(FIXTURE), "--output", str(out), "--platform", "all", "--quiet"]):
+                e.main()
+            self.assertTrue((out / "opencode").exists())
+            with patch.object(sys, "argv", ["extract_agent_config.py", str(FIXTURE), "--output", str(out), "--platform", "claude", "--quiet"]):
+                e.main()
+            dirs = {p.name for p in out.iterdir() if p.is_dir()}
+            self.assertEqual(dirs, {"claude"})
         finally:
             shutil.rmtree(out)
 

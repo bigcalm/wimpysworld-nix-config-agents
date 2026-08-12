@@ -57,6 +57,52 @@ jobs:
               print("settings.json rules missing or truncated")
               errors += 1
 
+          # The real tree ships 4 MCP servers; a broken merge that silently
+          # drops one must fail CI.
+          mcp = settings.get("mcp", {})
+          if sorted(mcp) != ["context7", "exa", "linear", "slack"]:
+              print(f"opencode MCP server mismatch: {sorted(mcp)}")
+              errors += 1
+
+          # Tool denies render into the permission map, keyed <server>_<tool>.
+          permission = settings.get("permission", {})
+          if permission.get("slack_slack_send_message") != "deny":
+              print("opencode MCP tool denies missing from permission map")
+              errors += 1
+
+          # House style is appended to the opencode rules.
+          if "A later reader still needs the evidence." not in rules:
+              print("opencode rules missing appended house style")
+              errors += 1
+
+          # tui.json carries the keybindings and TUI settings.
+          tui = json.loads(Path("/tmp/extracted/opencode/tui.json").read_text())
+          if len(tui.get("keybinds", {})) < 10:
+              print(f"opencode tui.json keybinds missing: {len(tui.get('keybinds', {}))}")
+              errors += 1
+          if "tui" in settings or "keybinds" in settings:
+              print("opencode settings.json must not carry tui/keybinds")
+              errors += 1
+
+          # Codex config.toml carries the MCP servers and model settings.
+          codex = tomllib.loads(Path("/tmp/extracted/codex/config.toml").read_text())
+          servers = codex.get("mcp_servers", {})
+          if "slack" not in servers or "client_id" not in servers["slack"].get("oauth", {}):
+              print("codex config.toml missing slack oauth block")
+              errors += 1
+          if codex.get("approval_policy") != "never" or codex.get("model") != "gpt-5.6-sol":
+              print("codex config.toml missing model settings")
+              errors += 1
+
+          # Claude ships the output style; pi carries the house style.
+          if not Path("/tmp/extracted/claude/output-styles/house-style.md").exists():
+              print("claude output-styles/house-style.md missing")
+              errors += 1
+          pi_agents = Path("/tmp/extracted/pi/AGENTS.md").read_text()
+          if "A later reader still needs the evidence." not in pi_agents:
+              print("pi AGENTS.md missing appended house style")
+              errors += 1
+
           raise SystemExit(errors)
           PY
 
@@ -65,12 +111,14 @@ jobs:
           bash -n apply_local_overlay.sh
           python3 -m py_compile local/patch_settings.py
           bash -n local/opencode/bin/glab-api-safe.sh
+          bash -n local/opencode/bin/gh-api-safe.sh
 
       - name: Exercise the overlay pipeline (idempotency)
         run: |
           # Uses the upstream nix-config clone from the previous step so the
-          # gh-api-safe.sh source and the rules text the patch anchors on are
-          # the real ones.
+          # rules text the patch anchors on is the real one. The wrappers
+          # ship from local/opencode/bin/, reviewed copies of the Fence
+          # wrappers.
           export HOME=/tmp/ovl-home
           mkdir -p "$HOME"
           ./apply_local_overlay.sh /tmp/nix-config /tmp/extracted

@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Local overlay system (`apply_local_overlay.sh`, `local/`) merging personal
   customisations into extracted output, with the `glab` GitLab CLI skill.
 - `glab-api-safe.sh` wrapper enforcing a read-only policy for `glab api`.
+- Codex `config.toml` output: MCP server tables plus the model, approval,
+  analytics, and developer-instruction settings now land in Codex's native
+  config file instead of an inert `mcp_servers.toml`.
+- Claude output style (`output-styles/house-style.md`) and the house-style
+  body appended to the opencode rules and pi `AGENTS.md`, mirroring the
+  Nix composition.
+- Codex `agents/openai.yaml` sidecars from `header.codex.toml`
+  (`allow-implicit-invocation`), and `spawn-agent = false` opt-out support.
+- opencode `tui.json` output (TUI settings and keybindings moved out of
+  `settings.json`), the `/init` command template, and MCP tool denies in
+  the permission map.
+- Behavioural test suites for both API wrappers, the overlay script, and
+  `patch_settings.py`.
 
 ### Fixed
 
@@ -20,10 +33,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Communication rules now load from the real source path
   (`assistants/styles/house-style/`).
 - OAuth, disabled tools, and bearer headers are emitted for OpenCode, Codex,
-  Pi, and Zed MCP configs where the source defines them.
+  Pi, and Zed MCP configs where the source defines them; pi MCP http entries
+  now carry the oauth block.
 - Codex command skills keep their per-command header files.
 - `glab-api-safe` blocks glued method overrides, `--hostname`, query/fragment
-  suffixes, and credential-bearing endpoints.
+  suffixes, and credential-bearing endpoints; also denies `*/secure_files`,
+  `*/personal_access_tokens`, and `*/impersonation_tokens`, allows the glued
+  `-fquery=` form for GraphQL reads, and no longer exports the dead
+  `GH_TELEMETRY` variable.
+- `gh-api-safe` (now a reviewed copy in `local/opencode/bin/`) rejects
+  `--hostname`, closing the exfiltration gap the glab wrapper already covered.
+- The delegate-task skill is regenerated from the current compose.nix content
+  (Waiting, Teardown, Authority, and Deadline sections restored).
+- Descriptions are escaped for TOML and YAML output, symlinks inside skill
+  directories are refused, `.sops` files are never copied, the README origin
+  URL is escaped, and `--quiet` now silences skill warnings.
+- Subset runs remove stale platform directories, and the generated README
+  uses `cp` (not `cp -r`) for the file-targeted zed and paseo commands.
+- `apply_local_overlay.sh` installs from `local/` only, checks both wrapper
+  sources before installing anything, refuses symlink sources, and drops
+  `rsync --update` so the overlay always wins.
+- The glab skill's jq label filter matches string label arrays, and the
+  `glab auth` guidance agrees with the fence policy.
 
 ## [1.0.0] - 2026-07-19
 

@@ -23,6 +23,7 @@
         init = {
           description = "Create AGENTS.md";
           agent = "rosey";
+          template = builtins.readFile ../assistants/agents/rosey/commands/create-agents-md/prompt.md;
         };
       };
     };

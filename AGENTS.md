@@ -50,15 +50,16 @@ Overlay structure:
 ```
 local/
 ├── opencode/
-│   ├── bin/                  # glab-api-safe.sh wrapper
+│   ├── bin/                  # gh-api-safe.sh and glab-api-safe.sh wrappers
 │   └── skills/glab/          # extra skill not in the Nix source
 └── patch_settings.py         # idempotent JSON patch for settings.json rules
 ```
 
-The overlay script copies `gh-api-safe.sh` directly from the nix-config source
-(`home-manager/_mixins/development/github/`) and `glab-api-safe.sh` from
-`local/opencode/bin/`, installing both to `~/.local/bin/` (without `.sh`
-extension) so they are on `$PATH`.
+Both wrappers are reviewed copies living in `local/opencode/bin/` (the
+glab wrapper is local-only; `gh-api-safe.sh` is a copy of the nix-config
+wrapper with an added `--hostname` deny, kept in sync by hand). The
+overlay script installs both to `~/.local/bin/` (without `.sh` extension)
+so they are on `$PATH`, and refuses symlink sources.
 
 ## Conventions
 

@@ -79,9 +79,9 @@ python3 extract_agent_config.py /path/to/nix-config --platform opencode --quiet
 ```
 
 This merges `local/opencode/` into the extracted tree, installs `gh-api-safe`
-from the nix-config source and `glab-api-safe` from `local/` to `~/.local/bin/`,
-and patches `settings.json` with personal rules. The script is idempotent —
-safe to run multiple times.
+and `glab-api-safe` (both reviewed copies in `local/opencode/bin/`) to
+`~/.local/bin/`, and patches `settings.json` with personal rules. The script
+is idempotent — safe to run multiple times.
 
 ### 4. Copy to the agent config directory
 
@@ -113,15 +113,16 @@ Customisations live in `local/<platform>/` and are merged by `apply_local_overla
 ```
 local/
 ├── opencode/
-│   ├── bin/                  # glab-api-safe.sh wrapper
+│   ├── bin/                  # gh-api-safe.sh and glab-api-safe.sh wrappers
 │   └── skills/glab/          # extra skill not in the Nix source
 └── patch_settings.py         # idempotent JSON patch for settings.json rules
 ```
 
-The overlay script copies `gh-api-safe.sh` directly from the nix-config source
-(`home-manager/_mixins/development/github/`) and `glab-api-safe.sh` from
-`local/opencode/bin/`, installing both to `~/.local/bin/` (without `.sh`
-extension) so they are on `$PATH`.
+Both wrappers are reviewed copies living in `local/opencode/bin/` (the
+glab wrapper is local-only; `gh-api-safe.sh` is a copy of the nix-config
+wrapper with an added `--hostname` deny, kept in sync by hand). The
+overlay installs both to `~/.local/bin/` (without `.sh` extension) so
+they are on `$PATH`, and refuses symlink sources.
 
 Target a specific output directory:
 

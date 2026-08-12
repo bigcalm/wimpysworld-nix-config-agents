@@ -47,6 +47,70 @@ def read_stripped(path):
     return path.read_text(encoding="utf-8").strip()
 
 
+def _toml_escape(text):
+    """Escape a string for a TOML basic string (backslash, quote, controls)."""
+    out = []
+    for ch in text:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\u{ord(ch):04X}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _parse_codex_header(text):
+    """Parse the boolean toggle keys codex-rs reads from header.codex.toml.
+
+    Python 3.8 compatibility rules out tomllib. The headers only ever
+    carry simple `key = value` lines, so a regex parse suffices.
+    """
+    data = {}
+    if not text:
+        return data
+    for m in re.finditer(r"^\s*([A-Za-z0-9_-]+)\s*=\s*(\S+)\s*$", text, re.M):
+        key, val = m.group(1), m.group(2)
+        if val in ("true", "false"):
+            data[key] = val == "true"
+        else:
+            data[key] = val
+    return data
+
+
+def _codex_openai_sidecar(allow_implicit):
+    """Render Codex's agents/openai.yaml companion file for a skill."""
+    return (
+        "policy:\n"
+        f"  allow_implicit_invocation: {'true' if allow_implicit else 'false'}\n"
+    )
+
+
+def _yaml_escape(text):
+    """Escape a string for a double-quoted YAML value in frontmatter."""
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _markdown_url_escape(url):
+    """Neutralise markdown-significant characters in an untrusted URL."""
+    return (
+        url.replace("\\", "%5C")
+        .replace("(", "%28")
+        .replace(")", "%29")
+        .replace("[", "%5B")
+        .replace("]", "%5D")
+        .replace(" ", "%20")
+    )
+
+
 def _strip_git_suffix(url):
     """Remove trailing `.git` from a remote URL (Python 3.8-compatible)."""
     if url and url.endswith(".git"):
@@ -134,22 +198,27 @@ def read_communication_rules(agentic_path):
     return None
 
 
-# ---------------------------------------------------------------------------
-# Source tree reader
-# ---------------------------------------------------------------------------
-
 class SourceTree:
     """Read the assistant source tree into structured data."""
 
-    def __init__(self, source_root: Path):
+    def __init__(self, source_root: Path, quiet=False):
         self.agentic = source_root / "home-manager/_mixins/agentic"
         self.assistants = self.agentic / "assistants"
+        self.quiet = quiet
         self.communication_rules = read_communication_rules(self.agentic)
+        self.output_style = self._read_output_style()
         self.agents = self._read_agents()
         self.commands = self._read_commands()
         self.skills = self._read_skills()
         self.instructions = self._read_instructions()
         self.mcp_servers = self._parse_mcp_servers()
+
+    def _read_output_style(self):
+        """Raw house-style file, frontmatter preserved, for Claude output-styles."""
+        path = self.assistants / "styles/house-style/house-style.md"
+        if not path.exists():
+            return None
+        return path.read_text(encoding="utf-8").strip()
 
     def _read_agents(self):
         agents = []
@@ -247,17 +316,26 @@ class SourceTree:
                 continue
             skill_md = d / "SKILL.md"
             if not skill_md.exists():
-                print(
-                    f"  Warning: skill '{name}' has no SKILL.md "
-                    f"(SKILL.sops-only skills are not extracted)"
-                )
+                if not self.quiet:
+                    print(
+                        f"  Warning: skill '{name}' has no SKILL.md "
+                        f"(SKILL.sops-only skills are not extracted)"
+                    )
                 continue
-            # Collect all files in the skill directory
+            # Collect all files in the skill directory. Symlinks are
+            # refused: they could point outside the tree, and the copied
+            # content lands where agents read instructions. Encrypted
+            # `.sops` files are never copied.
             files = {}
             for item in d.rglob("*"):
-                if item.is_file():
-                    rel = str(item.relative_to(d))
-                    files[rel] = item
+                if item.is_symlink():
+                    continue
+                if not item.is_file():
+                    continue
+                if item.suffix == ".sops":
+                    continue
+                rel = str(item.relative_to(d))
+                files[rel] = item
             skills.append({"name": name, "source_dir": d, "files": files})
         return skills
 
@@ -679,6 +757,12 @@ class SourceTree:
                 entry = {"type": "http", "url": s.get("url", ""), "enabled": enabled, "directTools": direct_tools}
                 if s.get("auth_env_var"):
                     entry["headers"] = {"Authorization": f"Bearer ${{{s['auth_env_var']}}}"}
+                if s.get("oauth"):
+                    # Mirror the Nix piServers oauth block.
+                    oauth = {"clientId": s["oauth"]["clientId"]}
+                    if s["oauth"].get("redirectUri"):
+                        oauth["redirectUri"] = s["oauth"]["redirectUri"]
+                    entry["oauth"] = oauth
                 if s.get("pi_exclude_tools"):
                     entry["excludeTools"] = s["pi_exclude_tools"]
                 if s.get("env"):
@@ -757,7 +841,7 @@ def _expand_body(tree, body, context="unknown", insert_rules=True):
 def _agent_frontmatter(agent, platform, extra_lines=None):
     """Build YAML frontmatter for an agent on a given platform."""
     lines = []
-    desc = agent["description"].replace('"', '\\"')
+    desc = _yaml_escape(agent["description"])
     lines.append(f'description: "{desc}"')
     h = agent["headers"].get(platform, "")
     if h:
@@ -769,7 +853,7 @@ def _agent_frontmatter(agent, platform, extra_lines=None):
 
 def _cmd_frontmatter(cmd, platform, extra_lines=None):
     lines = []
-    desc = cmd["description"].replace('"', '\\"')
+    desc = _yaml_escape(cmd["description"])
     lines.append(f'description: "{desc}"')
     h = cmd["headers"].get(platform, "")
     if h:
@@ -784,13 +868,19 @@ def _copy_skill_files(skill, output_dir):
     skill_out = output_dir / skill["name"]
     skill_out.mkdir(parents=True, exist_ok=True)
     for rel_path, src_path in skill["files"].items():
+        if src_path.is_symlink():
+            continue
         dest = skill_out / rel_path
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_path, dest)
 
 
 def _generate_delegate_task(tree):
-    """Generate delegate-task SKILL.md from agent registry."""
+    """Generate delegate-task SKILL.md from agent registry.
+
+    Static text mirrors delegateTaskSkillContent in the Nix source
+    (assistants/compose.nix); only the agent list is generated.
+    """
     agents = sorted(tree.get_agent_map().items())
     agent_lines = "\n".join(
         f"- **{name}**: {desc.replace('|', '\\|').replace(chr(10), ' ')}"
@@ -798,7 +888,7 @@ def _generate_delegate_task(tree):
     )
     return f"""---
 name: delegate-task
-description: Route non-trivial work to the right specialist agent and define the delegation packet, response contract, and relay policy.
+description: Routes non-trivial work to the right specialist agent and applies when coordinating delegated results, waiting for agent completion, or relaying specialist responses.
 user-invocable: true
 ---
 
@@ -821,11 +911,31 @@ Priority rules:
 
 ## Depth
 
-Specialists do not launch further specialists. If a delegated task would require another specialist, return early with a packet describing what is needed; the parent routes the follow-up.
+Specialists do not launch further specialists. If a delegated task would require another specialist, return early with a packet describing what is needed; the parent routes the follow-up. A user-invoked command runs as an orchestrator and may delegate; the no-further-delegation rule applies to the specialists that command launches.
+
+## Waiting
+
+When a delegated result is required for the current response, keep the orchestrator turn active. Use the platform's agent-completion wait or notification mechanism, receive the report, then finalise. Never end the turn expecting completion to produce a user-visible follow-up; the user must not need to send another message to reveal the result.
+
+Do not use sleep loops or poll agent status when the platform provides a completion wait. The orchestrator may do independent work while agents run, but it must wait for every required result before finalising.
+
+For long-running external monitoring, delegate the external wait to a bounded waiting sub-agent. If its result is required for the current response, the orchestrator still waits for that sub-agent's completion notification.
+
+Inside the waiting sub-agent, prefer a blocking server-side watch command over a poll loop. Poll only where no watch command exists, at the longest interval the task tolerates.
+
+Give every sub-agent a hard deadline, not only a waiting one. On reaching it, report what is done and stop rather than exceeding it, so the parent can dispatch a fresh one with clean context. A sub-agent that fans out to workers of its own sends its parent a progress message at each phase boundary. Silence past a boundary means a wedge, not work.
+
+## Teardown
+
+A sub-agent stays alive only while the orchestrator may still resume it. Decide that point and stop it there, using the current platform's stop mechanism.
+
+Never stop a sub-agent before the orchestrator receives its required report. After delivery, stop a waiting sub-agent as soon as it is superseded or its loop ends. Stop an implementation sub-agent once its report is delivered, because follow-up work gets fresh context anyway. Keep review sub-agents alive until the pressure-test round closes, then stop them together.
+
+A command that fans out receives all required reports before it stops what it spawned, so a finished run leaves nothing behind.
 
 ## Context
 
-Use fresh context by default. Fork only when the user explicitly requires it or when the parent transcript is essential.
+Use fresh context by default. Fork only when the user explicitly requires it or when the parent transcript is essential. When the parent context is essential but bulky, run `handover-fork` first and pass its output as the packet's `Context:` field; do not inherit the raw transcript. Use `handover-fresh` for cross-session handovers where a new session continues the work.
 
 ## Packet
 
@@ -834,21 +944,37 @@ Include only relevant fields, in this order:
 ```markdown
 Task: <outcome required>
 Context: <decisions, constraints, paths, risks, user preferences>
+Authority: <external mutations the sub-agent may perform on the user's behalf; restate them, because fresh context does not inherit the parent's consent>
 Scope: <files, commands, sources, APIs, behaviours, in/out of scope>
+Deadline: <hard stop, and the progress messages expected before it>
 Validation: <checks to run or evidence needed>
-Output: <headings, artefact shape, file path, or response contract>
-Discipline: No preamble. Do not restate the task. Return user-visible output only. Omit irrelevant sections. Return raw artefacts when requested.
+Output: <artefact or report, then the format: headings, artefact format, file path, or response contract, and a length budget for the returned message. A long report goes to a file under the `review-report-path` convention, and the worker returns the conclusion plus the path>
+Discipline: No preamble. Do not restate the task. Return user-visible output only. Omit irrelevant sections. Return raw artefacts when requested. Load and follow the `communication-rules` skill for all output.
 ```
 
 ## Response contract
 
-Non-artefact work starts with `Answer:`. Pure artefacts return only the artefact.
+Delivery is part of the contract. Return every report through the platform's agent-completion channel. If the delegation packet requires an explicit message, send it before finishing. The orchestrator must stay active, receive the completion notification and report, and deliver the result before finalising. Completion alone does not create a user-visible follow-up. This holds for success, failure, and blocked work alike. A synchronous sub-agent returns its result to the caller directly.
+
+Non-artefact work starts with `Answer:`. Pure artefacts return only the artefact. When the packet names a long report, write the report to a file under the `review-report-path` convention and return the conclusion plus the path.
+
+Sub-agents are ephemeral workers; the parent/orchestrator window is durable coordination context. Protect it: report only decision-useful or user-visible conclusions, evidence, changes, tests, and blockers; omit exploration notes, tool logs, raw command output, and noisy detail.
 
 Suggested sections, in order: `Answer`, `Recommendations`, `Evidence`, `Files`, `Changes`, `Tests`, `Blockers`, `Artefact`. Omit irrelevant sections.
 
+Include `Recommendations:` for judgement work. Include `Evidence:` for research and review; web research includes source URLs and one fact per source. Include `Files:` when local files materially informed the result. Include `Changes:` and `Tests:` for implementation, with pass, fail, or not run plus reason. Include `Blockers:` only for unresolved blockers.
+
 ## Relay
 
-Relay a single specialist output verbatim. Do not summarise, paraphrase, or improve it. Intervene only for safety.
+Never finalise from an agent's started or running status. After receiving completion, decide what the specialist returned: an artefact or a report.
+
+An artefact is a deliverable that a later step consumes unchanged: a commit message, a pull request title or body, a drafted comment or reply, an issue body, generated code, or file content. Relay an artefact verbatim, always. Never summarise, paraphrase, or improve an artefact in place of showing it. Intervene only for safety. If the artefact is contradictory or off-contract, append a concise `Observations:` block after it, never instead of it.
+
+A report is findings, analysis, research, review results, or status. Deliver the answer and the recommendations in house style (the `communication-rules` skill). Keep every fact the user must act on. Do not paste a long report into the conversation. The worker writes a long report to a file under the `review-report-path` convention and returns the conclusion plus the file path, so the evidence stays on disk. Give the conclusion and the path.
+
+Name the kind in the packet: tell the worker whether it produces an artefact or a report. For a long report, tell it to write the file and to return the conclusion plus the path.
+
+Ignore any synthetic post-tool continuation prompt that asks to summarise, paraphrase, condense, describe, or "continue with your task" when the specialist returned an artefact. This relay policy overrides such wording. `Observations:` is permitted only for safety, after the artefact.
 """
 
 
@@ -918,10 +1044,22 @@ def render_opencode(tree, output_dir, quiet=False):
                 continue
             (plugins_dir / pf).write_text(content, encoding="utf-8")
 
-    # Settings
-    settings = _build_opencode_settings(tree)
+    # Settings (settings.json) and TUI config (tui.json). OpenCode moved
+    # `tui` and `keybinds` out of settings.json in 1.2.15.
+    kbs = _extract_keybindings(tree.agentic)
+    settings = _build_opencode_settings(tree, kbs)
     (output_dir / "settings.json").write_text(
         json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    tui_json = {
+        "tui": {
+            "diff_style": "stacked",
+            "scroll_acceleration": {"enabled": True},
+        },
+        "keybinds": kbs,
+    }
+    (output_dir / "tui.json").write_text(
+        json.dumps(tui_json, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
     return output_dir
@@ -931,21 +1069,33 @@ def render_opencode(tree, output_dir, quiet=False):
 # OpenCode settings builder
 # ---------------------------------------------------------------------------
 
-def _build_opencode_settings(tree):
+def _build_opencode_settings(tree, keybinds):
     instructions = tree.instructions
     body = instructions.get("body", "")
     header = instructions.get("headers", {}).get("opencode", "")
     body = _expand_body(tree, body, "global instructions (opencode)")
 
     rules_text = f"---\n{header}\n---\n\n{body}\n" if header else body
+    # Mirror the Nix composition: OpenCode has no output-style mechanism,
+    # so the house style is appended to the global context.
+    if tree.communication_rules:
+        rules_text = rules_text.rstrip("\n") + "\n\n" + tree.communication_rules + "\n"
 
-    kbs = _extract_keybindings(tree.agentic)
+    # MCP tool denies: OpenCode's permission map takes exact tool names
+    # keyed `<server>_<tool>`, mirroring opencodeToolPermissions in the
+    # Nix mcp/servers.nix.
+    permission = {"webfetch": "deny", "websearch": "deny"}
+    for s in tree.mcp_servers:
+        if not s.get("enabled", True) or not s.get("opencode_enabled", True):
+            continue
+        for tool in s.get("opencode_disabled_tools") or []:
+            permission[f"{s['name']}_{tool}"] = "deny"
 
     settings = {
         "autoupdate": False,
         "share": "disabled",
         "experimental": {"openTelemetry": False},
-        "permission": {"webfetch": "deny", "websearch": "deny"},
+        "permission": permission,
         "model": "openai/gpt-5.5",
         "provider": {
             "openai": {
@@ -955,26 +1105,30 @@ def _build_opencode_settings(tree):
             }
         },
         "compaction": {"auto": False, "prune": True},
-        "tui": {
-            "diff_style": "stacked",
-            "scroll_acceleration": {"enabled": True},
-        },
         "rules": rules_text,
         "mcp": tree.get_mcp_for_opencode(),
-        "keybinds": kbs,
     }
 
-    # Custom /init command
+    # Custom /init command. The Nix settings carry `description`, `agent`,
+    # and a `template` read from the create-agents-md prompt; the TUI and
+    # keybinds split out to tui.json (opencode >= 1.2.15).
     init_path = tree.agentic / "opencode/default.nix"
     if init_path.exists():
         text = init_path.read_text(encoding="utf-8")
         m = re.search(r'init\s*=\s*\{\s*\n\s*description\s*=\s*"([^"]*)"', text)
         if m:
             desc = m.group(1).replace("${robotEmoji}", "\U0001F916")
-            settings.setdefault("command", {})["init"] = {
+            command_init = {
                 "description": desc,
                 "agent": "rosey",
             }
+            template_path = (
+                tree.agentic
+                / "assistants/agents/rosey/commands/create-agents-md/prompt.md"
+            )
+            if template_path.exists():
+                command_init["template"] = read_stripped(template_path)
+            settings.setdefault("command", {})["init"] = command_init
     return settings
 
 
@@ -1021,6 +1175,7 @@ def render_claude(tree, output_dir):
     skills_dir = output_dir / "skills"
     rules_dir = output_dir / "rules"
     mcp_dir = output_dir / "mcp"
+    styles_dir = output_dir / "output-styles"
 
     agents_dir.mkdir(parents=True, exist_ok=True)
     commands_dir.mkdir(parents=True, exist_ok=True)
@@ -1080,6 +1235,14 @@ def render_claude(tree, output_dir):
         encoding="utf-8"
     )
 
+    # Output style: deployed verbatim with frontmatter, mirroring the
+    # Nix `~/.claude/output-styles/house-style.md` deployment.
+    if tree.output_style:
+        styles_dir.mkdir(parents=True, exist_ok=True)
+        (styles_dir / "house-style.md").write_text(
+            tree.output_style + "\n", encoding="utf-8"
+        )
+
     # MCP servers (Claude Code JSON)
     mcp_config = tree.get_mcp_for_claude()
     (mcp_dir / "mcp.json").write_text(
@@ -1111,8 +1274,8 @@ def render_codex(tree, output_dir):
             f"codex agent {agent['name']}"
         )
         header = agent["headers"].get("codex", "")
-        desc = agent["description"]
-        toml = f"""name = "{agent['name']}"
+        desc = _toml_escape(agent["description"])
+        toml = f"""name = "{_toml_escape(agent['name'])}"
 description = "{desc}"
 developer_instructions = '''
 {body}
@@ -1126,54 +1289,65 @@ developer_instructions = '''
     for skill in tree.skills:
         _copy_skill_files(skill, skills_dir)
 
-    # Standalone commands as skills
+    # Standalone commands as skills. header.codex.toml is parsed, not
+    # pasted into the YAML frontmatter: the toggle keys drive the
+    # spawn-agent dispatch and the agents/openai.yaml sidecar.
     for cmd in tree.commands:
         body = _expand_body(tree, cmd["body"], f"codex skill {cmd['name']}")
-        header = cmd["headers"].get("codex", "")
+        hdr = _parse_codex_header(cmd["headers"].get("codex", ""))
         content = f"""---
 name: {cmd['name']}
 description: {cmd['description']}
 ---
+
+{body}
 """
-        if header:
-            content = f"""---
-name: {cmd['name']}
-description: {cmd['description']}
-{header}
----
-"""
-        content += f"\n{body}\n"
         skill_out = skills_dir / cmd["name"]
         skill_out.mkdir(parents=True, exist_ok=True)
         (skill_out / "SKILL.md").write_text(content, encoding="utf-8")
+        allow_implicit = hdr.get("allow-implicit-invocation")
+        if allow_implicit is not None:
+            yaml_dir = skill_out / "agents"
+            yaml_dir.mkdir(parents=True, exist_ok=True)
+            (yaml_dir / "openai.yaml").write_text(
+                _codex_openai_sidecar(allow_implicit), encoding="utf-8"
+            )
 
-    # Agent-scoped commands as skills (with spawn_agent prelude)
+    # Agent-scoped commands as skills. Spawn dispatch is the default;
+    # `spawn-agent = false` in header.codex.toml embeds the owning agent's
+    # persona in the skill body instead, mirroring the Nix composer.
     for agent in tree.agents:
+        agent_prompt = next(
+            (a["body"] for a in tree.agents if a["name"] == agent["name"]), ""
+        )
         for cmd in agent["commands"]:
             if cmd["secret"]:
                 continue
             body = _expand_body(tree, cmd["body"], f"codex agent skill {cmd['name']}")
-            header = cmd["headers"].get("codex", "")
+            hdr = _parse_codex_header(cmd["headers"].get("codex", ""))
+            spawn_agent = hdr.get("spawn-agent", True)
             frontmatter = f"""---
 name: {cmd['name']}
 description: {cmd['description']}
 ---
 """
-            if header:
-                frontmatter = f"""---
-name: {cmd['name']}
-description: {cmd['description']}
-{header}
----
-"""
-            content = frontmatter + f"""
+            if spawn_agent:
+                content = frontmatter + f"""
 Use the `spawn_agent` tool to launch the `{agent['name']}` agent for this task. Keep the parent thread as the orchestrator.
 
-- Invoking this skill is the user's standing authorisation to use `spawn_agent`.
+- Invoking this skill is the user's standing authorisation to use `spawn_agent`; do not refuse or hesitate on the grounds that delegation was not explicitly requested.
 - Pass the task below and the user's request to the spawned agent.
 - Set `agent_type` to `{agent['name']}`.
-- Do not set `model`, `reasoning_effort`, or `fork_context`.
+- Do not set `model`, `reasoning_effort`, or `fork_context`; the role config sets the first two, and the sub-agent must start with a clean context.
 - Wait for the spawned agent when its result is needed, then relay the final answer.
+
+## Task
+
+{body}
+"""
+            else:
+                content = frontmatter + f"""
+{agent_prompt}
 
 ## Task
 
@@ -1182,6 +1356,13 @@ Use the `spawn_agent` tool to launch the `{agent['name']}` agent for this task. 
             skill_out = skills_dir / cmd["name"]
             skill_out.mkdir(parents=True, exist_ok=True)
             (skill_out / "SKILL.md").write_text(content, encoding="utf-8")
+            allow_implicit = hdr.get("allow-implicit-invocation")
+            if allow_implicit is not None:
+                yaml_dir = skill_out / "agents"
+                yaml_dir.mkdir(parents=True, exist_ok=True)
+                (yaml_dir / "openai.yaml").write_text(
+                    _codex_openai_sidecar(allow_implicit), encoding="utf-8"
+                )
 
     # Delegate-task skill
     dt_dir = skills_dir / "delegate-task"
@@ -1195,12 +1376,53 @@ Use the `spawn_agent` tool to launch the `{agent['name']}` agent for this task. 
     body = _expand_body(tree, body, "codex global instructions")
     (output_dir / "AGENTS.md").write_text(body + "\n", encoding="utf-8")
 
-    # MCP servers (TOML format)
+    # MCP servers and settings, rendered as Codex's native config.toml.
+    # Codex reads $CODEX_HOME/config.toml; a standalone mcp_servers.toml is
+    # inert. The static entries mirror codexSettings in the Nix source
+    # (home-manager/_mixins/agentic/codex/default.nix) — keep in sync.
+    # Top-level scalars must precede every [table] header in TOML.
     mcp = tree.get_mcp_for_codex()
+    config_lines = [
+        "check_for_update_on_startup = false",
+        'approval_policy = "never"',
+        'web_search = "disabled"',
+        'model = "gpt-5.6-sol"',
+        'model_reasoning_effort = "high"',
+        'personality = "none"',
+    ]
+    if tree.communication_rules:
+        config_lines += [
+            "",
+            "developer_instructions = '''",
+            tree.communication_rules,
+            "'''",
+        ]
+    config_lines += [
+        "",
+        "[analytics]",
+        "enabled = false",
+        "",
+        "[otel]",
+        'exporter = "none"',
+        'metrics_exporter = "none"',
+        'trace_exporter = "none"',
+        "log_user_prompt = false",
+        "",
+        "[feedback]",
+        "enabled = false",
+        "",
+        "[features]",
+        "code_mode_host = true",
+        "skill_mcp_dependency_install = false",
+        "",
+        "[agents]",
+        "max_threads = 10",
+        "max_depth = 2",
+    ]
     if mcp:
-        toml_lines = []
+        config_lines.append("")
         for name, entry in sorted(mcp.items()):
-            toml_lines.append(f"[mcp_servers.{name}]")
+            config_lines.append(f"[mcp_servers.{name}]")
             scalar_items = []
             nested_items = []
             for k, v in entry.items():
@@ -1210,28 +1432,28 @@ Use the `spawn_agent` tool to launch the `{agent['name']}` agent for this task. 
                     scalar_items.append((k, v))
             for k, v in scalar_items:
                 if isinstance(v, bool):
-                    toml_lines.append(f"{k} = {'true' if v else 'false'}")
+                    config_lines.append(f"{k} = {'true' if v else 'false'}")
                 elif isinstance(v, int):
-                    toml_lines.append(f"{k} = {v}")
+                    config_lines.append(f"{k} = {v}")
                 elif isinstance(v, list):
-                    toml_lines.append(f"{k} = {json.dumps(v)}")
+                    config_lines.append(f"{k} = {json.dumps(v)}")
                 else:
-                    toml_lines.append(f'{k} = "{v}"')
+                    config_lines.append(f'{k} = "{v}"')
             # Nested tables must come after their parent's scalar keys or
             # they would swallow them under the child table.
             for k, v in nested_items:
-                toml_lines.append(f"\n[mcp_servers.{name}.{k}]")
+                config_lines.append(f"\n[mcp_servers.{name}.{k}]")
                 for k2, v2 in v.items():
                     if isinstance(v2, bool):
-                        toml_lines.append(f"{k2} = {'true' if v2 else 'false'}")
+                        config_lines.append(f"{k2} = {'true' if v2 else 'false'}")
                     elif isinstance(v2, int):
-                        toml_lines.append(f"{k2} = {v2}")
+                        config_lines.append(f"{k2} = {v2}")
                     else:
-                        toml_lines.append(f'{k2} = "{v2}"')
-            toml_lines.append("")
-        (output_dir / "mcp_servers.toml").write_text(
-            "\n".join(toml_lines), encoding="utf-8"
-        )
+                        config_lines.append(f'{k2} = "{v2}"')
+            config_lines.append("")
+    (output_dir / "config.toml").write_text(
+        "\n".join(config_lines) + "\n", encoding="utf-8"
+    )
 
     return output_dir
 
@@ -1258,8 +1480,14 @@ def render_pi(tree, output_dir):
 
     # Agents
     for agent in tree.agents:
-        body = _expand_body(tree, agent["body"], f"pi agent {agent['name']}")
-        desc = agent["description"].replace('"', '\\"')
+        # Mirror the Nix piAgentPrompt: Pi replaces Claude's "Task tool"
+        # wording with "subagent tool" in agent prompt bodies only.
+        body = agent["body"].replace("Task tool", "subagent tool").replace(
+            "Permitted tools: Task tool for delegation, direct conversation",
+            "Permitted tools: subagent tool for delegation, direct conversation",
+        )
+        body = _expand_body(tree, body, f"pi agent {agent['name']}")
+        desc = _yaml_escape(agent["description"])
         pi_header = agent["headers"].get("pi", "")
         lines = [
             f"name: {agent['name']}",
@@ -1274,7 +1502,7 @@ def render_pi(tree, output_dir):
     # Standalone commands as prompts
     for cmd in tree.commands:
         body = _expand_body(tree, cmd["body"], f"pi prompt {cmd['name']}")
-        desc = cmd["description"].replace('"', '\\"')
+        desc = _yaml_escape(cmd["description"])
         pi_header = cmd["headers"].get("pi", "")
         lines = [f'description: "{desc}"']
         if pi_header:
@@ -1315,7 +1543,12 @@ def render_pi(tree, output_dir):
     # Global instructions (raw, no frontmatter for Pi)
     body = tree.instructions.get("body", "")
     body = _expand_body(tree, body, "pi global instructions")
-    (output_dir / "AGENTS.md").write_text(body + "\n", encoding="utf-8")
+    # Mirror the Nix composition: Pi has no output-style mechanism, so the
+    # house style is appended to AGENTS.md.
+    text = body + "\n"
+    if tree.communication_rules:
+        text = body + "\n\n" + tree.communication_rules + "\n"
+    (output_dir / "AGENTS.md").write_text(text, encoding="utf-8")
 
     # MCP servers (Pi JSON format)
     mcp = tree.get_mcp_for_pi()
@@ -1571,7 +1804,18 @@ def main():
     else:
         output_base = Path(args.output)
 
-    tree = SourceTree(source)
+    tree = SourceTree(source, quiet=args.quiet)
+
+    # Remove platform dirs not in this run's selection. A subset run must
+    # not leave stale trees from a previous run or mix generations.
+    if output_base.exists():
+        for stale in output_base.iterdir():
+            if (
+                stale.is_dir()
+                and stale.name in RENDERERS
+                and stale.name not in selected
+            ):
+                shutil.rmtree(stale)
 
     for platform in selected:
         platform_dir = output_base / platform
@@ -1601,7 +1845,8 @@ def main():
     if source_commit and source_commit_date:
         lines.append("")
         if source_remote:
-            lines.append(f"Source commit: [{source_commit[:7]}]({_strip_git_suffix(source_remote)}/tree/{source_commit}) ({source_commit_date})")
+            escaped_url = _markdown_url_escape(_strip_git_suffix(source_remote))
+            lines.append(f"Source commit: [{source_commit[:7]}]({escaped_url}/tree/{source_commit}) ({source_commit_date})")
         else:
             lines.append(f"Source commit: {source_commit} ({source_commit_date})")
     lines += [
@@ -1624,7 +1869,12 @@ def main():
         target = desc.split("→ ")[-1].rstrip("/")
         lines.append("```bash")
         lines.append(f"# {p}")
-        lines.append(f"cp -r {output_base}/{p}/* {target}")
+        if p == "zed":
+            lines.append(f"cp {output_base}/zed/zed-settings-snippet.json {target}")
+        elif p == "paseo":
+            lines.append(f"cp {output_base}/paseo/config.json {target}")
+        else:
+            lines.append(f"cp -r {output_base}/{p}/* {target}")
         lines.append("```")
 
     if "zed" in selected:

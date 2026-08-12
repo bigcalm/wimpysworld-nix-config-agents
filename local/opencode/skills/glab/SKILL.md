@@ -246,13 +246,14 @@ glab issue list -O json | jq '.[] | {iid, title, labels}'
 glab mr list -F json | jq '.[] | select(.state == "opened") | .iid'
 
 # Combine with jq outside glab for complex transforms
-glab issue list -O json | jq '.[] | select(.labels | any(.name == "bug"))'
+glab issue list -O json | jq '.[] | select(.labels | any(. == "bug"))'
 ```
 
 ## Status & Auth
 
 ```bash
-glab auth status             # active account, token scopes, host
-glab auth status -t          # shows the token; allowed under Fence, never echo the value
+# `glab auth` is denied under Fence, so run it in an unfenced shell.
+glab auth status             # active account, token scopes, host (unfenced shell only)
+# `glab auth status -t` shows the token itself and is never allowed.
 # `glab auth login` and `glab auth logout` stay denied.
 ```

@@ -37,6 +37,11 @@ rec {
     exa = {
       transport = "http";
       url = "https://mcp.exa.ai/mcp";
+      oauth = {
+        clientId = "exa-456";
+        callbackPort = 3001;
+        redirectUri = "http://localhost:3001/callback";
+      };
     };
 
     nixos = {
@@ -93,7 +98,7 @@ rec {
         API_KEY = ''GOOGLE_CSE_API_KEY'';
       };
       consumers = {
-        zed.mode = "skip";
+        zed.mode = "context_server";
       };
     };
   };

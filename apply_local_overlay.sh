@@ -7,7 +7,7 @@
 #
 # This script:
 #   1. Copies local/opencode/ over the extracted opencode/ tree (rsync merge)
-#   2. Installs glab-api-safe from local/ and gh-api-safe from the nix-config source
+#   2. Installs gh-api-safe and glab-api-safe from local/opencode/bin/
 #   3. Runs patch_settings.py to inject glab rules into settings.json
 
 set -euo pipefail
@@ -23,12 +23,23 @@ if [[ $# -lt 1 ]]; then
 fi
 
 NIX_CONFIG="$1"
-GH_API_SAFE_SRC="${NIX_CONFIG}/home-manager/_mixins/development/github/gh-api-safe.sh"
+GH_API_SAFE_SRC="${LOCAL_DIR}/opencode/bin/gh-api-safe.sh"
+GLAB_API_SAFE_SRC="${LOCAL_DIR}/opencode/bin/glab-api-safe.sh"
 
-if [[ ! -f "${GH_API_SAFE_SRC}" ]]; then
-    echo "apply_local_overlay: gh-api-safe.sh not found at ${GH_API_SAFE_SRC}" >&2
-    exit 1
-fi
+# Both wrapper sources must exist and be regular files before anything is
+# installed, so a missing source cannot leave the merge half done. Symlink
+# sources are refused: `install` dereferences symlinks, and the wrapper
+# ends up executable on $PATH.
+for src in "${GH_API_SAFE_SRC}" "${GLAB_API_SAFE_SRC}"; do
+    if [[ ! -f "${src}" ]]; then
+        echo "apply_local_overlay: wrapper source not found at ${src}" >&2
+        exit 1
+    fi
+    if [[ -L "${src}" ]]; then
+        echo "apply_local_overlay: refusing symlink wrapper source ${src}" >&2
+        exit 1
+    fi
+done
 
 # Find the target directory
 if [[ $# -ge 2 ]]; then
@@ -60,17 +71,14 @@ fi
 echo "apply_local_overlay: merging local/opencode/ → ${OPENCODE_DIR}/"
 
 # Merge local files over extracted tree (preserves existing files not in local/)
-rsync -a --update "${LOCAL_DIR}/opencode/" "${OPENCODE_DIR}/"
+# No --update: the overlay must win even when the extracted copy is newer.
+# bin/ holds the wrapper sources for the install step below; it is not part
+# of the tree an agent reads, so exclude it from the merge.
+rsync -a --exclude=bin/ "${LOCAL_DIR}/opencode/" "${OPENCODE_DIR}/"
 
 # Install bin wrappers to ~/.local/bin/ so they are on $PATH
-# glab-api-safe comes from local/, gh-api-safe comes from the nix-config source
 echo "apply_local_overlay: installing bin wrappers to ~/.local/bin/"
 install -Dm755 "${GH_API_SAFE_SRC}" "${HOME}/.local/bin/gh-api-safe"
-GLAB_API_SAFE_SRC="${LOCAL_DIR}/opencode/bin/glab-api-safe.sh"
-if [[ ! -f "${GLAB_API_SAFE_SRC}" ]]; then
-    echo "apply_local_overlay: glab-api-safe.sh not found at ${GLAB_API_SAFE_SRC}" >&2
-    exit 1
-fi
 install -Dm755 "${GLAB_API_SAFE_SRC}" "${HOME}/.local/bin/glab-api-safe"
 
 # Patch settings.json
