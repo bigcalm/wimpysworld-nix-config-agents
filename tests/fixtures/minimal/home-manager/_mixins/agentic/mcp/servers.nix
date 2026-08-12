@@ -13,6 +13,11 @@ let
     name = "playwright-mcp-with-nix-browser";
     text = "exec playwright-mcp";
   };
+  # This binding is referenced by name in consumer attrs below.
+  slackWriteTools = [
+    "slack_send_message"
+    "slack_update_canvas"
+  ];
 in
 rec {
   servers = {
@@ -54,13 +59,18 @@ rec {
 
     slack = {
       transport = "http";
-      url = "https://mcp.slack.com/mcp";
+      # mkDefault wrapper and redirectUri must be parsed.
+      url = lib.mkDefault "https://mcp.slack.com/mcp";
       oauth = {
         clientId = "12345";
         callbackPort = 3000;
+        redirectUri = "http://localhost:3000/callback";
       };
       consumers = {
         pi = { enabled = false; omit = true; };
+        opencode.disabledTools = slackWriteTools;
+        codex.disabledTools = slackWriteTools;
+        pi.excludeTools = slackWriteTools;
       };
     };
 
@@ -73,12 +83,14 @@ rec {
       };
     };
 
-    mcpGoogleCse = {
+    # Quoted key + ''...'' indented string + comment with a closing brace.
+    "mcpGoogleCse" = {
       transport = "stdio";
       command = "${pkgs.uv}/bin/uvx";
       args = [ "mcp-google-cse" ];
       env = {
-        API_KEY = "GOOGLE_CSE_API_KEY";
+        # A } inside this comment must not break the parse.
+        API_KEY = ''GOOGLE_CSE_API_KEY'';
       };
       consumers = {
         zed.mode = "skip";

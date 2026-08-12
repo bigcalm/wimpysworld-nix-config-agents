@@ -30,7 +30,7 @@ python3 extract_agent_config.py /path/to/nix-config --output ~/my-configs
 
 | Platform | Contents | Copy to |
 |----------|----------|---------|
-| **opencode** | agents, commands, skills, plugins, settings.json, MCP | `~/.config/opencode/` |
+| **opencode** | agents, commands, skills, plugins, settings.json, MCP | `~/.opencode/` |
 | **claude** | agents, commands, skills, rules/instructions.md, MCP | `~/.claude/` |
 | **codex** | agents (TOML), skills, AGENTS.md, MCP | `~/.codex/` |
 | **pi** | agents, prompts, skills, AGENTS.md, MCP | `~/.pi/agent/` |
@@ -86,9 +86,9 @@ safe to run multiple times.
 ### 4. Copy to the agent config directory
 
 ```bash
-cp -r _agent_configs_*/opencode/* ~/.config/opencode/
+cp -r _agent_configs_*/opencode/* ~/.opencode/
 # or, with rsync:
-rsync -a _agent_configs_*/opencode/ ~/.config/opencode/
+rsync -a _agent_configs_*/opencode/ ~/.opencode/
 ```
 
 ### 5. Verify
@@ -103,7 +103,7 @@ Both wrappers should be on `$PATH` via `~/.local/bin/`.
 ### One-liner
 
 ```bash
-python3 extract_agent_config.py /path/to/nix-config --platform opencode --quiet && ./apply_local_overlay.sh /path/to/nix-config && rsync -a _agent_configs_*/opencode/ ~/.config/opencode/
+python3 extract_agent_config.py /path/to/nix-config --platform opencode --quiet && ./apply_local_overlay.sh /path/to/nix-config && rsync -a _agent_configs_*/opencode/ ~/.opencode/
 ```
 
 ## Local overlay
@@ -113,6 +113,7 @@ Customisations live in `local/<platform>/` and are merged by `apply_local_overla
 ```
 local/
 ├── opencode/
+│   ├── bin/                  # glab-api-safe.sh wrapper
 │   └── skills/glab/          # extra skill not in the Nix source
 └── patch_settings.py         # idempotent JSON patch for settings.json rules
 ```
@@ -125,7 +126,7 @@ extension) so they are on `$PATH`.
 Target a specific output directory:
 
 ```bash
-./apply_local_overlay.sh /path/to/custom-output
+./apply_local_overlay.sh /path/to/nix-config /path/to/custom-output
 ```
 
 ## Licence

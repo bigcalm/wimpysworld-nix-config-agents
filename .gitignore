@@ -2,4 +2,5 @@ _agent_configs_*
 _agent_configs/
 __pycache__/
 .ruff_cache
+.coverage
 nix-config/

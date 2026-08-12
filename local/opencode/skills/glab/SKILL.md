@@ -107,11 +107,11 @@ glab issue unsubscribe 456
 # List pipelines
 glab ci list
 glab ci list -r main --per-page 5                                      # by ref
-glab ci view -p 12345678                                               # one pipeline by id
+glab ci list -s failed                                                 # by status
 
-# View a pipeline
-glab ci view 12345678
-glab ci view 12345678 --web
+# View a pipeline (branch/tag positional, or -w for the web UI)
+glab ci view main
+glab ci view --web
 
 # Job logs
 glab ci trace <job-id>                                                  # live log tail for a job
@@ -119,7 +119,7 @@ glab ci view                                                           # interac
 
 # Retry / cancel
 glab ci retry 12345678
-glab ci cancel 12345678
+glab ci cancel pipeline 12345678                                       # namespace: pipeline or job
 
 # Trigger pipeline
 glab ci run -b main
@@ -185,7 +185,7 @@ command for the operator to run in an unfenced shell.
 
 `glab-api-safe` wraps `glab api`, enforces a read-only allow-list with a
 defence-in-depth deny-list on the REST path, blocks
-`-X`/`--method` (including glued forms such as `-XPOST`)/`--hostname`/`-f`/`-F`/`--field`/`--raw-field`/`--input` (except `query=` value under `graphql`, where `@file` is still rejected), and runs a
+`-X`/`--method` (including glued forms such as `-XPOST`)/`--hostname`/`-f`/`-F`/`--field`/`--raw-field`/`--input` (except `query=` value under `graphql`, where `@file` is still rejected), strips `?`/`#` suffixes to the bare path before matching, rejects format extensions such as `.json`, and runs a
 best-effort GraphQL heuristic that rejects any query whose body contains
 a surviving `mutation` or `subscription` keyword after comments and
 string literals have been stripped. The heuristic is not a real GraphQL
@@ -195,16 +195,17 @@ on stderr; on rejection, switch to the matching dedicated subcommand or
 escalate to an unfenced shell rather than retrying the same call. Run
 `glab-api-safe --help` for the full policy summary.
 
-Placeholders `{owner}`, `{repo}`, `{branch}` are replaced from current
-git context. Default method is GET.
+Placeholders `:namespace`, `:repo`, `:branch`, `:fullpath`, `:group`,
+`:id`, `:user`, and `:username` are replaced from current git context.
+Default method is GET.
 
 ```bash
 # GET piped into jq
-glab-api-safe projects/{owner}%2F{repo}/pipelines \
+glab-api-safe projects/:namespace%2F:repo/pipelines \
   | jq '.[:5] | .[] | {id, status, ref}'
 
 # Paginate all results
-glab-api-safe projects/{owner}%2F{repo}/issues --paginate | jq '.[].title'
+glab-api-safe projects/:namespace%2F:repo/issues --paginate | jq '.[].title'
 
 # GraphQL (heuristic-screened; mutations and subscriptions are rejected)
 glab-api-safe graphql -f query='{ currentUser { username } }'
@@ -223,28 +224,29 @@ glab-api-safe events | jq '.[] | {action_name, target_type}'
 
 ```bash
 # PUT / POST
-glab api projects/{owner}%2F{repo}/issues/456 -X PUT -F state=closed
-glab api projects/{owner}%2F{repo}/labels -F name="triage" -F color="e4e669"
+glab api projects/:namespace%2F:repo/issues/456 -X PUT -F state=closed
+glab api projects/:namespace%2F:repo/labels -F name="triage" -F color="e4e669"
 
 # Typed fields (-F): true/false/null/integers become JSON types; @file reads file
-glab api projects/{owner}%2F{repo}/issues -F title="Bug" -F description=@issue.md
+glab api projects/:namespace%2F:repo/issues -F title="Bug" -F description=@issue.md
 ```
 
 ## JSON Output Pattern
 
-List and view commands accept `-F json` (or `--output json`), then pipe
-into `jq`:
+List and view commands accept `-F json` (`mr list`, `ci list`) or
+`-O json` (`issue list`), then pipe into `jq`:
 
 ```bash
 # JSON output piped to jq
 glab mr list -F json | jq '.[] | {iid, title, state, source_branch}'
 glab ci list -F json | jq '.[] | {id, status, ref, sha}'
+glab issue list -O json | jq '.[] | {iid, title, labels}'
 
 # Filter inline
 glab mr list -F json | jq '.[] | select(.state == "opened") | .iid'
 
 # Combine with jq outside glab for complex transforms
-glab issue list -F json | jq '.[] | select(.labels | any(.name == "bug"))'
+glab issue list -O json | jq '.[] | select(.labels | any(.name == "bug"))'
 ```
 
 ## Status & Auth

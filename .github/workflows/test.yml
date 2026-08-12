@@ -32,6 +32,12 @@ jobs:
           from pathlib import Path
 
           errors = 0
+          expected_dirs = {"opencode", "claude", "codex", "pi", "zed", "paseo", "cursor"}
+          found = {p.name for p in Path("/tmp/extracted").iterdir() if p.is_dir()}
+          if found != expected_dirs:
+              print(f"Missing platform dirs: {expected_dirs - found}")
+              errors += 1
+
           for path in Path("/tmp/extracted").rglob("*"):
               if not path.is_file():
                   continue
@@ -45,5 +51,41 @@ jobs:
                   print(f"Parse error in {path}: {exc}")
                   errors += 1
 
+          settings = json.loads(Path("/tmp/extracted/opencode/settings.json").read_text())
+          rules = settings.get("rules", "")
+          if not rules.startswith("---") or len(rules) < 100:
+              print("settings.json rules missing or truncated")
+              errors += 1
+
           raise SystemExit(errors)
+          PY
+
+      - name: Syntax-check overlay scripts and wrappers
+        run: |
+          bash -n apply_local_overlay.sh
+          python3 -m py_compile local/patch_settings.py
+          bash -n local/opencode/bin/glab-api-safe.sh
+
+      - name: Exercise the overlay pipeline (idempotency)
+        run: |
+          # Uses the upstream nix-config clone from the previous step so the
+          # gh-api-safe.sh source and the rules text the patch anchors on are
+          # the real ones.
+          export HOME=/tmp/ovl-home
+          mkdir -p "$HOME"
+          ./apply_local_overlay.sh /tmp/nix-config /tmp/extracted
+          ./apply_local_overlay.sh /tmp/nix-config /tmp/extracted
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          settings = json.loads(Path("/tmp/extracted/opencode/settings.json").read_text())
+          rules = settings["rules"]
+          # Applied exactly once: the gitlab fence marker appears one time.
+          assert rules.count("Keep GitLab mutations on named, authorised paths.") == 1, rules
+          assert "For GitLab, load the `glab` skill" in rules
+          assert Path("/tmp/extracted/opencode/skills/glab/SKILL.md").exists()
+          # Wrappers installed to the HOME-overridden PATH dir.
+          assert Path("/tmp/ovl-home/.local/bin/glab-api-safe").is_file()
+          assert Path("/tmp/ovl-home/.local/bin/gh-api-safe").is_file()
           PY

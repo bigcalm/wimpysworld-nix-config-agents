@@ -29,8 +29,15 @@ class TestSourceTreeParsing(unittest.TestCase):
         self.assertEqual(agent["description"], "Test engineering specialist")
         self.assertIn("opencode", agent["headers"])
         self.assertIn("codex", agent["headers"])
-        self.assertEqual(len(agent["commands"]), 1)
-        self.assertEqual(agent["commands"][0]["name"], "review-tests")
+        self.assertEqual(len(agent["commands"]), 2)
+        self.assertEqual({c["name"] for c in agent["commands"]}, {"review-tests", "draft-secret"})
+
+    def test_marks_secret_commands(self):
+        tree = e.SourceTree(FIXTURE)
+        brain = next(a for a in tree.agents if a["name"] == "brain")
+        secret = next(c for c in brain["commands"] if c["name"] == "draft-secret")
+        self.assertTrue(secret["secret"])
+        self.assertIsNone(secret["body"])
 
     def test_loads_commands(self):
         tree = e.SourceTree(FIXTURE)
@@ -69,6 +76,15 @@ class TestSourceTreeParsing(unittest.TestCase):
         # OAuth
         self.assertEqual(servers["slack"]["oauth"]["clientId"], "12345")
         self.assertEqual(servers["slack"]["oauth"]["callbackPort"], 3000)
+        self.assertEqual(servers["slack"]["oauth"]["redirectUri"], "http://localhost:3000/callback")
+
+        # lib.mkDefault-wrapped URL is unwrapped
+        self.assertEqual(servers["slack"]["url"], "https://mcp.slack.com/mcp")
+
+        # Top-level binding resolved in disabledTools/excludeTools
+        self.assertEqual(servers["slack"]["opencode_disabled_tools"], ["slack_send_message", "slack_update_canvas"])
+        self.assertEqual(servers["slack"]["codex_disabled_tools"], ["slack_send_message", "slack_update_canvas"])
+        self.assertEqual(servers["slack"]["pi_exclude_tools"], ["slack_send_message", "slack_update_canvas"])
 
         # Nested pi consumers
         self.assertEqual(servers["slack"]["pi_omit"], True)
@@ -79,7 +95,7 @@ class TestSourceTreeParsing(unittest.TestCase):
         self.assertEqual(servers["nixos"]["enabled"], True)
         self.assertEqual(servers["mcpGoogleCse"]["enabled"], True)
 
-        # Env
+        # Quoted key parsed; ''...'' string and comment with } handled
         self.assertEqual(servers["mcpGoogleCse"]["env"], {"API_KEY": "GOOGLE_CSE_API_KEY"})
         # Quoted command value is stripped
         self.assertEqual(servers["mcpGoogleCse"]["command_ref"], "${pkgs.uv}/bin/uvx")
@@ -106,6 +122,10 @@ class TestRenderers(unittest.TestCase):
         self.assertEqual(settings["mcp"]["nixos"]["enabled"], False)
         self.assertEqual(settings["mcp"]["playwright"]["command"], ["playwright-mcp", "--headless"])
         self.assertEqual(settings["mcp"]["mcpGoogleCse"]["environment"]["API_KEY"], "{env:GOOGLE_CSE_API_KEY}")
+        slack = settings["mcp"]["slack"]
+        self.assertEqual(slack["oauth"]["clientId"], "12345")
+        self.assertEqual(slack["oauth"]["redirectUri"], "http://localhost:3000/callback")
+        self.assertEqual(slack["url"], "https://mcp.slack.com/mcp")
 
         self.assertTrue((out / "agents" / "brain.md").exists())
         self.assertTrue((out / "commands" / "create-skill.md").exists())
@@ -127,6 +147,9 @@ class TestRenderers(unittest.TestCase):
         self.assertEqual(mcp["mcp_servers"]["linear"]["default_tools_approval_mode"], "prompt")
         self.assertEqual(mcp["mcp_servers"]["playwright"]["command"], "playwright-mcp")
         self.assertEqual(mcp["mcp_servers"]["mcpGoogleCse"]["command"], "${pkgs.uv}/bin/uvx")
+        slack = mcp["mcp_servers"]["slack"]
+        self.assertEqual(slack["disabled_tools"], ["slack_send_message", "slack_update_canvas"])
+        self.assertEqual(slack["oauth"]["client_id"], "12345")
         self.assertTrue((out / "agents" / "brain.toml").exists())
 
     def test_pi_output(self):
@@ -136,6 +159,7 @@ class TestRenderers(unittest.TestCase):
         self.assertNotIn("linear", mcp)
         self.assertEqual(mcp["context7"]["directTools"], True)
         self.assertEqual(mcp["mcpGoogleCse"]["env"]["API_KEY"], "${GOOGLE_CSE_API_KEY}")
+        self.assertEqual(mcp["context7"]["headers"]["Authorization"], "Bearer ${CONTEXT7_API_KEY}")
 
     def test_zed_output(self):
         out = e.render_zed(self.tree, self.tmp)
@@ -180,10 +204,19 @@ class TestFullExtraction(unittest.TestCase):
                         continue
                     suffix = path.suffix
                     text = path.read_text(encoding="utf-8")
+                    # No sops secret body may leak into any output file.
+                    self.assertNotIn("secret-body-must-never-leak", text)
                     if suffix == ".json":
                         json.loads(text)
                     elif suffix == ".toml":
                         tomllib.loads(text)
+
+            expected_dirs = {"opencode", "claude", "codex", "pi", "zed", "paseo", "cursor"}
+            self.assertEqual(expected_dirs, {p.name for p in out.iterdir() if p.is_dir()})
+            # Settings rules must be non-empty markdown.
+            settings = json.loads((out / "opencode" / "settings.json").read_text())
+            self.assertTrue(settings["rules"].startswith("---"))
+            self.assertGreater(len(settings["rules"]), 100)
         finally:
             shutil.rmtree(out)
 

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Local overlay system (`apply_local_overlay.sh`, `local/`) merging personal
+  customisations into extracted output, with the `glab` GitLab CLI skill.
+- `glab-api-safe.sh` wrapper enforcing a read-only policy for `glab api`.
+
+### Fixed
+
+- Extractor no longer breaks on Nix comments and strings containing braces,
+  quoted keys, `lib.mkDefault`-wrapped values, or `''...''` indented strings.
+- Communication rules now load from the real source path
+  (`assistants/styles/house-style/`).
+- OAuth, disabled tools, and bearer headers are emitted for OpenCode, Codex,
+  Pi, and Zed MCP configs where the source defines them.
+- Codex command skills keep their per-command header files.
+- `glab-api-safe` blocks glued method overrides, `--hostname`, query/fragment
+  suffixes, and credential-bearing endpoints.
+
 ## [1.0.0] - 2026-07-19
 
 ### Added

@@ -1,72 +1,64 @@
 #!/usr/bin/env bash
 
-# glab-api-safe: Fence-friendly wrapper around `glab api`.
+# gh-api-safe: Fence-friendly wrapper around `gh api`.
 #
-# This wrapper exists so the Fence policy can deny the broad `glab api` escape
+# This wrapper exists so the Fence policy can deny the broad `gh api` escape
 # hatch while still letting agents perform read-shaped REST and GraphQL
-# requests against the GitLab API. The semantics are "safe", not strictly
-# "read-only": GET requests against method-overloaded endpoints are permitted,
-# but any request that smuggles a body or overrides the method via `glab`'s
-# own flags is rejected.
+# requests against the GitHub API. The semantics are "safe", not strictly
+# "read-only": GET requests against method-overloaded endpoints such as
+# `notifications` are permitted, but any request that smuggles a body or
+# overrides the method via `gh`'s own flags is rejected.
 #
 # Policy summary:
-#   * Argv pre-check rejects -X/--method (including glued forms such as
-#     -XPOST), --hostname, -f/--field, -F/--raw-field, and --input on every
-#     token. The only exception is `-f query=...` (or -F/--field/--raw-field
-#     with `query=`) when the endpoint is `graphql`.
-#   * Endpoints with `?`/`#` suffixes are stripped to the bare path before
-#     matching, so the lists always see the path without the query.
-#     Format extensions are rejected outright.
+#   * Argv pre-check rejects -X/--method, -f/--field, -F/--raw-field, and
+#     --input on every token. The only exception is `-f query=...` (or
+#     -F/--field/--raw-field with `query=`) when the endpoint is `graphql`.
 #   * REST endpoints must match an allow-list. A deny-list overrides the
-#     allow-list and rejects credential, admin, secrets, runner,
-#     personal-access-token, access-token, deploy-token, and support-PIN
-#     endpoints.
+#     allow-list and rejects credential, admin, secrets, deploy-key, runner
+#     registration, and SCIM endpoints.
 #   * GraphQL queries are parsed best-effort (comments and string literals
 #     stripped) and rejected if a `mutation` or `subscription` keyword
 #     survives. This is a heuristic, not a real GraphQL parser; aliased
 #     queries and `@file` queries are out of scope (`@file` is rejected
 #     outright).
 #   * On a policy violation the wrapper exits 64 with a single-line reason
-#     on stderr. Otherwise it delegates to the GitLab CLI API command with the
+#     on stderr. Otherwise it delegates to the GitHub CLI API command with the
 #     request argv unchanged.
 
 readonly EX_POLICY=64
 
 die() {
-	printf 'glab-api-safe: %s\n' "$*" >&2
+	printf 'gh-api-safe: %s\n' "$*" >&2
 	exit "${EX_POLICY}"
 }
 
 usage() {
 	cat <<'EOF'
-glab-api-safe: Fence-friendly wrapper around `glab api`.
+gh-api-safe: Fence-friendly wrapper around `gh api`.
 
 USAGE
-    glab-api-safe ENDPOINT [glab api flags...]
-    glab-api-safe graphql -f query='{ ... }'
-    glab-api-safe --help
+    gh-api-safe ENDPOINT [gh api flags...]
+    gh-api-safe graphql -f query='{ ... }'
+    gh-api-safe --help
 
 POLICY
-    Argv pre-check rejects -X/--method (including glued forms such as
-    -XPOST), --hostname, -f/--field, -F/--raw-field, and --input on every
-    token. The exception is `-f query=...` (or the equivalent
-    -F/--field/--raw-field forms) when the endpoint is `graphql`, so
-    read-only GraphQL queries remain usable.
+    Argv pre-check rejects -X/--method, -f/--field, -F/--raw-field, and
+    --input on every token. The exception is `-f query=...` (or the
+    equivalent -F/--field/--raw-field forms) when the endpoint is
+    `graphql`, so read-only GraphQL queries remain usable.
 
-    Endpoints carrying a `?` or `#` suffix are stripped to the bare path
-    before policy matching, so `projects/1/variables?x=y` is denied even
-    though the raw token would not match the deny-list. Format extensions
-    (`.json`, `.atom`, `.xml`, `.txt`) are rejected outright.
+    REST endpoints must match an allow-list: rate_limit, meta, octocat,
+    user, user/*, users/*, orgs/*, repos/*, search/*, notifications,
+    notifications/*, gists, gists/*, licenses, licenses/*, gitignore,
+    gitignore/*, emojis, feeds, markdown. A deny-list overrides the
+    allow-list and rejects admin/*, enterprises/*, scim/*, applications/*,
+    marketplace_listing/*, credential-bearing user paths (keys, gpg_keys,
+    ssh_signing_keys, emails), */secrets, */deploy-keys, and the runner
+    registration/remove tokens.
 
-    REST endpoints must match an allow-list: projects, projects/*, groups,
-    groups/*, user, user/*, users/*, namespaces, namespaces/*, search,
-    events, markdown, version, meta, todos, todos/*, issues, issues/*,
-    merge_requests, merge_requests/*, snippets, snippets/*.
-
-    A deny-list overrides the allow-list and rejects admin/*,
-    personal_access_tokens, runners, applications, */variables, */secrets,
-    */runners, */access_tokens, */deploy_tokens, user/support_pin, and the
-    user credential surface (user/emails, user/keys, user/gpg_keys).
+    `markdown` is on the allow-list for completeness but is a POST-only
+    endpoint, so even a permitted invocation will fail server-side without
+    a body.
 
     GraphQL: the query value is stripped of `#` comments and `"..."` /
     `"""..."""` string literals, then rejected if a `mutation` or
@@ -74,8 +66,8 @@ POLICY
     parser, so aliased mutations, fragment-sourced operations, and
     `@file` queries are not detected and `@file` is rejected outright.
 
-    On a policy violation glab-api-safe exits 64 with a single-line reason
-    on stderr. Otherwise it delegates to the GitLab CLI API command with the
+    On a policy violation gh-api-safe exits 64 with a single-line reason
+    on stderr. Otherwise it delegates to the GitHub CLI API command with the
     request argv unchanged.
 EOF
 }
@@ -98,10 +90,10 @@ args=("$@")
 nargs=${#args[@]}
 
 if [[ ${nargs} -eq 0 ]]; then
-	die "missing endpoint (try: glab-api-safe --help)"
+	die "missing endpoint (try: gh-api-safe --help)"
 fi
 
-# Phase 1: find the first positional argument. Treat the flags that glab api
+# Phase 1: find the first positional argument. Treat the flags that gh api
 # documents as taking a separate value as consuming the following argv
 # entry, so we skip past their values when looking for the endpoint.
 endpoint=""
@@ -136,26 +128,8 @@ while [[ ${i} -lt ${nargs} ]]; do
 done
 
 if [[ -z ${endpoint} ]]; then
-	die "missing endpoint (try: glab-api-safe --help)"
+	die "missing endpoint (try: gh-api-safe --help)"
 fi
-
-# Strip query/fragment suffixes and format extensions before policy
-# matching. The allow/deny lists match the raw endpoint token, so
-# appending `?x=y`, `#frag`, or `.json` would otherwise bypass them and
-# still reach the server with the token attached.
-case "${endpoint}" in
-*\?* | *\#*)
-	# Keep the query/fragment off the policy-matched path. The bare path
-	# before `?`/`#` is what the allow/deny lists see.
-	endpoint="${endpoint%%\?*}"
-	endpoint="${endpoint%%\#*}"
-	;;
-esac
-case "${endpoint}" in
-*.json | *.atom | *.xml | *.txt)
-	die "endpoint '${endpoint}' is not permitted (format suffix)"
-	;;
-esac
 
 is_graphql=0
 case "${endpoint}" in
@@ -183,9 +157,6 @@ while [[ ${j} -lt ${nargs} ]]; do
 	--method=*)
 		die "method override (--method=) is not permitted"
 		;;
-	--hostname | --hostname=*)
-		die "--hostname is not permitted (token exfiltration risk)"
-		;;
 	-f | -F | --field | --raw-field)
 		j=$((j + 1))
 		if [[ ${j} -ge ${nargs} ]]; then
@@ -209,8 +180,8 @@ while [[ ${j} -lt ${nargs} ]]; do
 			die "${flag}= is only permitted as 'query=' for the graphql endpoint"
 		fi
 		;;
-	-f* | -F* | -X*)
-		die "glued ${tok:0:2} short flags are not supported by glab-api-safe"
+	-f* | -F*)
+		die "glued ${tok:0:2} short flags are not supported by gh-api-safe"
 		;;
 	esac
 	j=$((j + 1))
@@ -221,61 +192,48 @@ if [[ ${is_graphql} -eq 0 ]]; then
 	# Allow-list: the endpoint path must match one of these prefixes.
 	# Patterns are case-sensitive and use shell case-glob semantics.
 	case "${endpoint}" in
-	projects | projects/*) ;;
-	groups | groups/*) ;;
+	rate_limit | meta | octocat) ;;
 	user | user/*) ;;
 	users/*) ;;
-	namespaces | namespaces/*) ;;
-	search | search/*) ;;
-	events) ;;
+	orgs/*) ;;
+	repos/*) ;;
+	search/*) ;;
+	notifications | notifications/*) ;;
+	gists | gists/*) ;;
+	licenses | licenses/*) ;;
+	gitignore | gitignore/*) ;;
+	emojis) ;;
+	feeds) ;;
 	markdown) ;;
-	version) ;;
-	meta) ;;
-	todos | todos/*) ;;
-	issues | issues/*) ;;
-	merge_requests | merge_requests/*) ;;
-	snippets | snippets/*) ;;
 	*)
 		die "endpoint '${endpoint}' is not on the REST allow-list"
 		;;
 	esac
 
 	# Deny-list: defence in depth. Rejects credential, admin, secrets,
-	# runner, and personal-access-token paths even if they would
+	# deploy-key, and runner registration paths even if they would
 	# otherwise be matched by the allow-list above.
 	case "${endpoint}" in
-	admin/*)
-		die "endpoint '${endpoint}' is on the REST deny-list (admin surface)"
+	admin/* | enterprises/* | scim/* | applications/* | marketplace_listing/*)
+		die "endpoint '${endpoint}' is on the REST deny-list (admin/enterprise surface)"
 		;;
-	personal_access_tokens | personal_access_tokens/*)
-		die "endpoint '${endpoint}' is on the REST deny-list (personal access tokens)"
+	user/keys | user/keys/* | user/gpg_keys | user/gpg_keys/*)
+		die "endpoint '${endpoint}' is on the REST deny-list (credential material)"
 		;;
-	runners | runners/*)
-		die "endpoint '${endpoint}' is on the REST deny-list (runners)"
+	user/ssh_signing_keys | user/ssh_signing_keys/*)
+		die "endpoint '${endpoint}' is on the REST deny-list (credential material)"
 		;;
-	applications | applications/*)
-		die "endpoint '${endpoint}' is on the REST deny-list (OAuth applications)"
-		;;
-	*/variables | */variables/*)
-		die "endpoint '${endpoint}' is on the REST deny-list (CI/CD variables)"
+	user/emails | user/emails/*)
+		die "endpoint '${endpoint}' is on the REST deny-list (account email surface)"
 		;;
 	*/secrets | */secrets/*)
 		die "endpoint '${endpoint}' is on the REST deny-list (secrets)"
 		;;
-	*/runners | */runners/*)
-		die "endpoint '${endpoint}' is on the REST deny-list (project/group runners)"
+	*/deploy-keys | */deploy-keys/*)
+		die "endpoint '${endpoint}' is on the REST deny-list (deploy keys)"
 		;;
-	*/access_tokens | */access_tokens/*)
-		die "endpoint '${endpoint}' is on the REST deny-list (access tokens)"
-		;;
-	*/deploy_tokens | */deploy_tokens/*)
-		die "endpoint '${endpoint}' is on the REST deny-list (deploy tokens)"
-		;;
-	user/support_pin | user/support_pin/*)
-		die "endpoint '${endpoint}' is on the REST deny-list (support PIN)"
-		;;
-	user/emails | user/emails/* | user/keys | user/keys/* | user/gpg_keys | user/gpg_keys/*)
-		die "endpoint '${endpoint}' is on the REST deny-list (user credential surface)"
+	*/runners/registration-token | */runners/remove-token)
+		die "endpoint '${endpoint}' is on the REST deny-list (runner registration token)"
 		;;
 	esac
 fi
@@ -359,9 +317,11 @@ if [[ ${is_graphql} -eq 1 ]]; then
 	fi
 fi
 
-: "${GLAB_API_SAFE_GLAB:=glab}"
+: "${GH_API_SAFE_GH:=gh}"
 export GH_TELEMETRY="${GH_TELEMETRY:-false}"
 
-# Use the real GitLab CLI binary through a private helper name. The raw
-# `glab api` command remains denied for user-entered commands.
-exec "${GLAB_API_SAFE_GLAB}" api "$@"
+# Use the real GitHub CLI binary through a private helper name. The Nixpkgs
+# `gh` entry point is a Bash wrapper, which can trip nested shebang execution
+# under Fence, and the raw `gh api` command remains denied for user-entered
+# commands.
+exec "${GH_API_SAFE_GH}" api "$@"

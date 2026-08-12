@@ -54,13 +54,84 @@ def _strip_git_suffix(url):
     return url
 
 
+def _nix_code_iter(text):
+    """Yield (offset, char) for characters outside Nix comments and strings.
+
+    Skips `#` line comments, `/* */` block comments, `"..."` double-quoted
+    strings (with escapes), and `''...''` indented strings, so brace
+    counting sees only structural characters.
+    """
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        two = text[i:i + 2]
+        if ch == "#":
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        if two == "/*":
+            i += 2
+            while i + 1 < n and text[i:i + 2] != "*/":
+                i += 1
+            i = min(i + 2, n)
+            continue
+        if two == "''":
+            i += 2
+            while i + 1 < n and text[i:i + 2] != "''":
+                i += 1
+            i = min(i + 2, n)
+            continue
+        if ch == '"':
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    i += 2
+                    continue
+                if text[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            continue
+        yield i, ch
+        i += 1
+
+
+def _line_brace_depth(line):
+    """Brace depth contributed by a line, ignoring comments and strings."""
+    depth = 0
+    for _, ch in _nix_code_iter(line):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+    return depth
+
+
 # ---------------------------------------------------------------------------
 # Communication rules
 # ---------------------------------------------------------------------------
 
 def read_communication_rules(agentic_path):
-    path = agentic_path / "hooks/communication-rules/communication-rules.md"
-    return read_stripped(path) if path.exists() else None
+    # The canonical house style lives at assistants/styles/house-style/
+    # (frontmatter stripped); the old hooks/communication-rules path no
+    # longer exists in the source tree.
+    candidates = [
+        agentic_path / "assistants/styles/house-style/house-style.md",
+        agentic_path / "hooks/communication-rules/communication-rules.md",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8").strip()
+        # Strip a leading YAML frontmatter block, mirroring the source's
+        # stripFrontmatter in assistants/compose.nix.
+        if text.startswith("---"):
+            parts = text.split("---", 2)
+            if len(parts) >= 3:
+                text = parts[2].strip()
+        return text or None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +247,10 @@ class SourceTree:
                 continue
             skill_md = d / "SKILL.md"
             if not skill_md.exists():
+                print(
+                    f"  Warning: skill '{name}' has no SKILL.md "
+                    f"(SKILL.sops-only skills are not extracted)"
+                )
                 continue
             # Collect all files in the skill directory
             files = {}
@@ -214,13 +289,20 @@ class SourceTree:
         if servers_start == -1:
             return []
 
+        # Resolve top-level list bindings (e.g. `slackWriteTools = [ ... ];`)
+        # so consumer attrs that reference them by name produce real lists.
+        bindings = {}
+        for m in re.finditer(r'^\s*(\w+)\s*=\s*\[(.*?)\];', text, re.MULTILINE | re.DOTALL):
+            bindings[m.group(1)] = re.findall(r'"([^"]*)"', m.group(2))
+
         servers_line_start = text.rfind("\n", 0, servers_start) + 1
         servers_indent = len(text[servers_line_start:servers_start]) - len(text[servers_line_start:servers_start].lstrip())
 
         brace_depth = 0
         servers_block_start = None
         servers_block_end = -1
-        for i, ch in enumerate(text[servers_start:], servers_start):
+        for rel, ch in _nix_code_iter(text[servers_start:]):
+            i = servers_start + rel
             if ch == "{":
                 if brace_depth == 0 and servers_block_start is None:
                     servers_block_start = i
@@ -243,19 +325,15 @@ class SourceTree:
         entries = []
         i = 0
         while i < len(lines):
-            m = re.match(r'^ {' + str(base_indent) + r'}(\w+)\s*=\s*\{', lines[i])
+            m = re.match(r'^ {' + str(base_indent) + r'}(?:"(\w+)"|(\w+))\s*=\s*\{', lines[i])
             if m:
-                name = m.group(1)
+                name = m.group(1) or m.group(2)
                 start = i
                 depth = 0
                 end = None
                 j = i
                 while j < len(lines):
-                    for ch in lines[j]:
-                        if ch == "{":
-                            depth += 1
-                        elif ch == "}":
-                            depth -= 1
+                    depth += _line_brace_depth(lines[j])
                     if depth == 0:
                         end = j + 1
                         break
@@ -269,8 +347,11 @@ class SourceTree:
                 i += 1
 
         def extract_attr(et, attr):
-            m = re.search(rf'^\s+{re.escape(attr)}\s*=\s*"([^"]*)"', et, re.MULTILINE)
-            return m.group(1) if m else None
+            m = re.search(rf'^\s+{re.escape(attr)}\s*=\s*(.*)', et, re.MULTILINE)
+            if not m:
+                return None
+            raw = m.group(1).strip().rstrip(";").strip()
+            return _nix_string_value(raw)
 
         def extract_bool(et, attr, default=True, attr_indent=None):
             if attr_indent is not None:
@@ -279,14 +360,26 @@ class SourceTree:
                 m = re.search(rf'^\s+{re.escape(attr)}\s*=\s*(false|true)', et, re.MULTILINE)
             return m.group(1) == "true" if m else default
 
-        def extract_consumers_bool(et, consumer, attr="enabled", default=True):
-            m = re.search(rf'^\s+{re.escape(consumer)}\.{re.escape(attr)}\s*=\s*(false|true)', et, re.MULTILINE)
-            return m.group(1) == "true" if m else default
+        def _nix_string_value(raw):
+            """Extract a value from a double-quoted or ''...'' Nix string."""
+            raw = raw.strip().rstrip(";").strip()
+            uw = re.match(r'^lib\.(?:mkDefault|mkForce)\s+(.*)$', raw)
+            if uw:
+                raw = uw.group(1).strip()
+            m = re.match(r'^"([^"]*)"$', raw, re.DOTALL)
+            if m:
+                return m.group(1)
+            m = re.match(r"^''((?:[^']|'[^'])*)''$", raw, re.DOTALL)
+            if m:
+                return m.group(1)
+            return None
 
         def extract_auth(et):
             if 'kind = "bearer"' in et:
-                m = re.search(r'envVar\s*=\s*"(\w+)"', et)
-                return m.group(1) if m else None
+                m = re.search(r'envVar\s*=\s*(.+)', et)
+                if m:
+                    val = m.group(1).strip().rstrip(";").strip()
+                    return _nix_string_value(val)
             return None
 
         def extract_args(et):
@@ -300,6 +393,8 @@ class SourceTree:
                 return True
             if raw == "false":
                 return False
+            if raw in bindings:
+                return bindings[raw]
             m = re.match(r'^"([^"]*)"$', raw)
             if m:
                 return m.group(1)
@@ -318,13 +413,13 @@ class SourceTree:
                 return None
             start = m.end() - 1
             depth = 0
-            for i, ch in enumerate(et[start:], start):
+            for rel, ch in _nix_code_iter(et[start:]):
                 if ch == "{":
                     depth += 1
                 elif ch == "}":
                     depth -= 1
                     if depth == 0:
-                        return et[start:i + 1]
+                        return et[start:start + rel + 1]
             return None
 
         def _extract_consumer_attrs(et, consumer):
@@ -348,15 +443,22 @@ class SourceTree:
             inner = block[1:-1]
             client_id = None
             callback_port = None
+            redirect_uri = None
             m = re.search(r'clientId\s*=\s*"([^"]*)"', inner)
             if m:
                 client_id = m.group(1)
             m = re.search(r'callbackPort\s*=\s*(\d+)', inner)
             if m:
                 callback_port = int(m.group(1))
+            m = re.search(r'redirectUri\s*=\s*"([^"]*)"', inner)
+            if m:
+                redirect_uri = m.group(1)
             if client_id is None or callback_port is None:
                 return None
-            return {"clientId": client_id, "callbackPort": callback_port}
+            oauth = {"clientId": client_id, "callbackPort": callback_port}
+            if redirect_uri:
+                oauth["redirectUri"] = redirect_uri
+            return oauth
 
         def extract_env(et):
             block = _extract_nested_block(et, "env")
@@ -364,8 +466,10 @@ class SourceTree:
                 return None
             inner = block[1:-1]
             env = {}
-            for m in re.finditer(r'(\w+)\s*=\s*"([^"]*)"', inner):
-                env[m.group(1)] = m.group(2)
+            for m in re.finditer(r'(\w+)\s*=\s*([^\n;]+)', inner):
+                val = _nix_string_value(m.group(2))
+                if val is not None:
+                    env[m.group(1)] = val
             return env if env else None
 
         def extract_startup_timeout(et):
@@ -415,11 +519,14 @@ class SourceTree:
             zed_attrs = _extract_consumer_attrs(et, "zed")
 
             s["opencode_enabled"] = opencode_attrs.get("enabled", True)
+            s["opencode_disabled_tools"] = opencode_attrs.get("disabledTools")
             s["claude_enabled"] = claude_attrs.get("enabled", True)
             s["codex_enabled"] = codex_attrs.get("enabled", True)
             s["codex_default_tools_approval_mode"] = codex_attrs.get("defaultToolsApprovalMode", "approve")
+            s["codex_disabled_tools"] = codex_attrs.get("disabledTools")
             s["pi_enabled"] = pi_attrs.get("enabled", True)
             s["pi_omit"] = pi_attrs.get("omit", False)
+            s["pi_exclude_tools"] = pi_attrs.get("excludeTools")
             s["pi_direct_tools"] = pi_attrs.get("directTools", s["opencode_enabled"])
             s["zed_enabled"] = zed_attrs.get("enabled", True)
             s["zed_mode"] = zed_attrs.get("mode", "context_server")
@@ -456,27 +563,10 @@ class SourceTree:
     def _build_auth_header(self, env_var):
         return {"Authorization": f"Bearer {{env:{env_var}}}"}
 
-    def _build_claude_auth(self, env_var):
-        return {"Authorization": f"Bearer ${{{{config.sops.placeholder.{env_var}}}}}"}
-
     @staticmethod
     def _portable_stdio_command(cmd_ref, args):
         """Map Nix-specific stdio wrappers to portable commands and clean args."""
-        args = list(args)
-        if cmd_ref == "playwrightMcpWithNixBrowser":
-            cmd_ref = "playwright-mcp"
-            filtered = []
-            skip = False
-            for a in args:
-                if skip:
-                    skip = False
-                    continue
-                if a == "--executable-path":
-                    skip = True
-                    continue
-                filtered.append(a)
-            args = filtered
-        return cmd_ref, args
+        return cmd_ref, list(args)
 
     def _render_mcp_opencode(self):
         config = {}
@@ -492,6 +582,11 @@ class SourceTree:
                 entry = {"type": "remote", "url": s.get("url", ""), "enabled": enabled}
                 if s.get("auth_env_var"):
                     entry["headers"] = self._build_auth_header(s["auth_env_var"])
+                if s.get("oauth"):
+                    oauth = {"clientId": s["oauth"]["clientId"], "callbackPort": s["oauth"]["callbackPort"]}
+                    if s["oauth"].get("redirectUri"):
+                        oauth["redirectUri"] = s["oauth"]["redirectUri"]
+                    entry["oauth"] = oauth
                 config[name] = entry
             else:
                 cmd_ref, args = self._portable_stdio_command(
@@ -546,6 +641,10 @@ class SourceTree:
                 entry = {"url": s.get("url", ""), "enabled": enabled}
                 if s.get("auth_env_var"):
                     entry["bearer_token_env_var"] = s["auth_env_var"]
+                if s.get("oauth"):
+                    entry["oauth"] = {"client_id": s["oauth"]["clientId"]}
+                if s.get("codex_disabled_tools"):
+                    entry["disabled_tools"] = s["codex_disabled_tools"]
                 if s.get("startup_timeout_sec"):
                     entry["startup_timeout_sec"] = s["startup_timeout_sec"]
                 entry["default_tools_approval_mode"] = s.get("codex_default_tools_approval_mode", "approve")
@@ -555,6 +654,8 @@ class SourceTree:
                     s.get("command_ref", name), s.get("args", [])
                 )
                 entry = {"command": cmd_ref, "args": args, "enabled": enabled}
+                if s.get("codex_disabled_tools"):
+                    entry["disabled_tools"] = s["codex_disabled_tools"]
                 if s.get("startup_timeout_sec"):
                     entry["startup_timeout_sec"] = s["startup_timeout_sec"]
                 entry["default_tools_approval_mode"] = s.get("codex_default_tools_approval_mode", "approve")
@@ -577,7 +678,9 @@ class SourceTree:
             if s["transport"] == "http":
                 entry = {"type": "http", "url": s.get("url", ""), "enabled": enabled, "directTools": direct_tools}
                 if s.get("auth_env_var"):
-                    entry["headers"] = self._build_auth_header(s["auth_env_var"])
+                    entry["headers"] = {"Authorization": f"Bearer ${{{s['auth_env_var']}}}"}
+                if s.get("pi_exclude_tools"):
+                    entry["excludeTools"] = s["pi_exclude_tools"]
                 if s.get("env"):
                     entry["env"] = {k: f"${{{v}}}" for k, v in s["env"].items()}
                 config[name] = entry
@@ -588,6 +691,8 @@ class SourceTree:
                 entry = {"type": "stdio", "command": cmd_ref,
                          "args": args, "enabled": enabled,
                          "directTools": direct_tools}
+                if s.get("pi_exclude_tools"):
+                    entry["excludeTools"] = s["pi_exclude_tools"]
                 if s.get("env"):
                     entry["env"] = {k: f"${{{v}}}" for k, v in s["env"].items()}
                 config[name] = entry
@@ -605,10 +710,13 @@ class SourceTree:
             enabled = s.get("zed_enabled", True)
 
             if s["transport"] == "http":
+                args = ["-y", "mcp-remote", s.get("url", "")]
+                if s.get("auth_env_var"):
+                    args += ["--header", f"Authorization: Bearer ${{{s['auth_env_var']}}}"]
                 config[s["name"]] = {
                     "enabled": enabled,
                     "command": "npx",
-                    "args": ["-y", "mcp-remote", s.get("url", "")],
+                    "args": args,
                 }
             else:
                 cmd_ref, args = self._portable_stdio_command(
@@ -1021,13 +1129,20 @@ developer_instructions = '''
     # Standalone commands as skills
     for cmd in tree.commands:
         body = _expand_body(tree, cmd["body"], f"codex skill {cmd['name']}")
+        header = cmd["headers"].get("codex", "")
         content = f"""---
 name: {cmd['name']}
 description: {cmd['description']}
 ---
-
-{body}
 """
+        if header:
+            content = f"""---
+name: {cmd['name']}
+description: {cmd['description']}
+{header}
+---
+"""
+        content += f"\n{body}\n"
         skill_out = skills_dir / cmd["name"]
         skill_out.mkdir(parents=True, exist_ok=True)
         (skill_out / "SKILL.md").write_text(content, encoding="utf-8")
@@ -1038,11 +1153,20 @@ description: {cmd['description']}
             if cmd["secret"]:
                 continue
             body = _expand_body(tree, cmd["body"], f"codex agent skill {cmd['name']}")
-            content = f"""---
+            header = cmd["headers"].get("codex", "")
+            frontmatter = f"""---
 name: {cmd['name']}
 description: {cmd['description']}
 ---
-
+"""
+            if header:
+                frontmatter = f"""---
+name: {cmd['name']}
+description: {cmd['description']}
+{header}
+---
+"""
+            content = frontmatter + f"""
 Use the `spawn_agent` tool to launch the `{agent['name']}` agent for this task. Keep the parent thread as the orchestrator.
 
 - Invoking this skill is the user's standing authorisation to use `spawn_agent`.
@@ -1077,7 +1201,14 @@ Use the `spawn_agent` tool to launch the `{agent['name']}` agent for this task. 
         toml_lines = []
         for name, entry in sorted(mcp.items()):
             toml_lines.append(f"[mcp_servers.{name}]")
+            scalar_items = []
+            nested_items = []
             for k, v in entry.items():
+                if isinstance(v, dict):
+                    nested_items.append((k, v))
+                else:
+                    scalar_items.append((k, v))
+            for k, v in scalar_items:
                 if isinstance(v, bool):
                     toml_lines.append(f"{k} = {'true' if v else 'false'}")
                 elif isinstance(v, int):
@@ -1086,6 +1217,17 @@ Use the `spawn_agent` tool to launch the `{agent['name']}` agent for this task. 
                     toml_lines.append(f"{k} = {json.dumps(v)}")
                 else:
                     toml_lines.append(f'{k} = "{v}"')
+            # Nested tables must come after their parent's scalar keys or
+            # they would swallow them under the child table.
+            for k, v in nested_items:
+                toml_lines.append(f"\n[mcp_servers.{name}.{k}]")
+                for k2, v2 in v.items():
+                    if isinstance(v2, bool):
+                        toml_lines.append(f"{k2} = {'true' if v2 else 'false'}")
+                    elif isinstance(v2, int):
+                        toml_lines.append(f"{k2} = {v2}")
+                    else:
+                        toml_lines.append(f'{k2} = "{v2}"')
             toml_lines.append("")
         (output_dir / "mcp_servers.toml").write_text(
             "\n".join(toml_lines), encoding="utf-8"

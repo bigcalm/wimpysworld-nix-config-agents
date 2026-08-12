@@ -50,6 +50,7 @@ Overlay structure:
 ```
 local/
 ├── opencode/
+│   ├── bin/                  # glab-api-safe.sh wrapper
 │   └── skills/glab/          # extra skill not in the Nix source
 └── patch_settings.py         # idempotent JSON patch for settings.json rules
 ```
