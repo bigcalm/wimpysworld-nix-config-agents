@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for apply_local_overlay.sh and local/patch_settings.py.
+"""Tests for apply_local_overlay.sh and local/patch_agents_md.py.
 
 The overlay installs wrappers to $HOME/.local/bin, so every run uses a
 scratch HOME and a scratch extracted tree.
@@ -15,7 +15,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OVERLAY = REPO_ROOT / "apply_local_overlay.sh"
-PATCH = REPO_ROOT / "local/patch_settings.py"
+PATCH = REPO_ROOT / "local/patch_agents_md.py"
 GLAB_WRAPPER = REPO_ROOT / "local/opencode/bin/glab-api-safe.sh"
 GH_WRAPPER = REPO_ROOT / "local/opencode/bin/gh-api-safe.sh"
 
@@ -26,8 +26,8 @@ GH_TOOL_LINE = (
 )
 
 
-def make_settings_dir(root: Path) -> Path:
-    """Build an extracted-like opencode tree with a patchable settings.json."""
+def make_agents_dir(root: Path) -> Path:
+    """Build an extracted-like opencode tree with a patchable AGENTS.md."""
     opencode = root / "opencode"
     opencode.mkdir(parents=True)
     rules = (
@@ -36,13 +36,11 @@ def make_settings_dir(root: Path) -> Path:
         "Keep GitHub mutations on named, authorised paths.\n\n"
         "Other section.\n"
     )
-    (opencode / "settings.json").write_text(
-        json.dumps({"rules": rules}) + "\n"
-    )
+    (opencode / "AGENTS.md").write_text(rules)
     return opencode
 
 
-class TestPatchSettings(unittest.TestCase):
+class TestPatchAgents(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="patch-test-"))
 
@@ -65,40 +63,37 @@ class TestPatchSettings(unittest.TestCase):
         return r
 
     def test_applies_then_idempotent(self):
-        opencode = make_settings_dir(self.tmp)
+        opencode = make_agents_dir(self.tmp)
         self.run_patch(opencode)
-        rules = json.loads((opencode / "settings.json").read_text())["rules"]
+        rules = (opencode / "AGENTS.md").read_text()
         self.assertIn("Keep GitLab mutations on named, authorised paths.", rules)
         self.assertEqual(rules.count("Keep GitLab mutations on named, authorised paths."), 1)
         self.assertIn("For GitLab, load the `glab` skill", rules)
         self.assertIn("glab-api-safe", rules)
         # Second run is a no-op.
         self.run_patch(opencode)
-        rules2 = json.loads((opencode / "settings.json").read_text())["rules"]
+        rules2 = (opencode / "AGENTS.md").read_text()
         self.assertEqual(rules, rules2)
 
     def test_refuses_when_github_paragraph_drifted(self):
-        opencode = make_settings_dir(self.tmp)
-        settings_path = opencode / "settings.json"
-        settings = json.loads(settings_path.read_text())
-        settings["rules"] = settings["rules"].replace(
+        opencode = make_agents_dir(self.tmp)
+        agents_path = opencode / "AGENTS.md"
+        text = agents_path.read_text().replace(
             "use a dedicated `gh` subcommand first",
             "use a dedicated `gh` subcommand initially",
         )
-        settings_path.write_text(json.dumps(settings) + "\n")
+        agents_path.write_text(text)
         r = self.run_patch(opencode, expected_exit=1)
         self.assertIn("refusing to patch silently", r.stderr)
 
     def test_refuses_when_github_section_missing(self):
         opencode = self.tmp / "opencode"
         opencode.mkdir()
-        (opencode / "settings.json").write_text(
-            json.dumps({"rules": "# Rules\n\nNothing here.\n"}) + "\n"
-        )
+        (opencode / "AGENTS.md").write_text("# Rules\n\nNothing here.\n")
         r = self.run_patch(opencode, expected_exit=1)
         self.assertIn("expected GitHub rules paragraphs not found", r.stderr)
 
-    def test_missing_settings_json(self):
+    def test_missing_agents_md(self):
         r = subprocess.run(
             ["python3", str(PATCH), str(self.tmp)],
             capture_output=True,
@@ -115,7 +110,7 @@ class TestApplyLocalOverlay(unittest.TestCase):
         self.home.mkdir()
         self.target = self.tmp / "out"
         self.target.mkdir()
-        make_settings_dir(self.target)
+        make_agents_dir(self.target)
 
     def tearDown(self):
         shutil.rmtree(self.tmp)
@@ -137,12 +132,12 @@ class TestApplyLocalOverlay(unittest.TestCase):
 
     def test_idempotent_merge_and_install(self):
         self.run_overlay("dummy-nix-config-path", str(self.target))
-        first = (self.target / "opencode" / "settings.json").read_text()
+        first = (self.target / "opencode" / "AGENTS.md").read_text()
         self.assertIn("Keep GitLab mutations", first)
         self.assertTrue((self.home / ".local/bin/glab-api-safe").is_file())
         self.assertTrue((self.home / ".local/bin/gh-api-safe").is_file())
         self.run_overlay("dummy-nix-config-path", str(self.target))
-        self.assertEqual((self.target / "opencode" / "settings.json").read_text(), first)
+        self.assertEqual((self.target / "opencode" / "AGENTS.md").read_text(), first)
 
     def test_missing_wrapper_source_fails_before_install(self):
         shutil.move(str(GLAB_WRAPPER), str(GLAB_WRAPPER) + ".bak")
@@ -152,7 +147,7 @@ class TestApplyLocalOverlay(unittest.TestCase):
             # Nothing installed, settings untouched.
             self.assertFalse((self.home / ".local/bin/glab-api-safe").exists())
             self.assertFalse((self.home / ".local/bin/gh-api-safe").exists())
-            self.assertNotIn("Keep GitLab mutations", (self.target / "opencode" / "settings.json").read_text())
+            self.assertNotIn("Keep GitLab mutations", (self.target / "opencode" / "AGENTS.md").read_text())
         finally:
             shutil.move(str(GLAB_WRAPPER) + ".bak", str(GLAB_WRAPPER))
 

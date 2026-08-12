@@ -1044,12 +1044,17 @@ def render_opencode(tree, output_dir, quiet=False):
                 continue
             (plugins_dir / pf).write_text(content, encoding="utf-8")
 
-    # Settings (settings.json) and TUI config (tui.json). OpenCode moved
-    # `tui` and `keybinds` out of settings.json in 1.2.15.
+    # Global config (opencode.json) and global rules (AGENTS.md). OpenCode
+    # reads its config from ~/.config/opencode/opencode.json and the global
+    # rules from ~/.config/opencode/AGENTS.md; `tui` and `keybinds` live in
+    # tui.json (split out in 1.2.15). There is no `rules` key in the config.
     kbs = _extract_keybindings(tree.agentic)
     settings = _build_opencode_settings(tree, kbs)
-    (output_dir / "settings.json").write_text(
+    (output_dir / "opencode.json").write_text(
         json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    (output_dir / "AGENTS.md").write_text(
+        _build_opencode_rules(tree), encoding="utf-8"
     )
     tui_json = {
         "tui": {
@@ -1069,18 +1074,24 @@ def render_opencode(tree, output_dir, quiet=False):
 # OpenCode settings builder
 # ---------------------------------------------------------------------------
 
-def _build_opencode_settings(tree, keybinds):
+def _build_opencode_rules(tree):
+    """Global rules text for opencode's AGENTS.md (no YAML frontmatter).
+
+    OpenCode reads ~/.config/opencode/AGENTS.md as raw markdown and has no
+    frontmatter parser for it, so the header that other platforms keep as
+    frontmatter is dropped and the body is emitted directly.
+    """
     instructions = tree.instructions
     body = instructions.get("body", "")
-    header = instructions.get("headers", {}).get("opencode", "")
     body = _expand_body(tree, body, "global instructions (opencode)")
-
-    rules_text = f"---\n{header}\n---\n\n{body}\n" if header else body
     # Mirror the Nix composition: OpenCode has no output-style mechanism,
     # so the house style is appended to the global context.
     if tree.communication_rules:
-        rules_text = rules_text.rstrip("\n") + "\n\n" + tree.communication_rules + "\n"
+        body = body.rstrip("\n") + "\n\n" + tree.communication_rules + "\n"
+    return body
 
+
+def _build_opencode_settings(tree, keybinds):
     # MCP tool denies: OpenCode's permission map takes exact tool names
     # keyed `<server>_<tool>`, mirroring opencodeToolPermissions in the
     # Nix mcp/servers.nix.
@@ -1105,7 +1116,6 @@ def _build_opencode_settings(tree, keybinds):
             }
         },
         "compaction": {"auto": False, "prune": True},
-        "rules": rules_text,
         "mcp": tree.get_mcp_for_opencode(),
     }
 

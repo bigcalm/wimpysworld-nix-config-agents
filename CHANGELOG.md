@@ -21,13 +21,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Codex `agents/openai.yaml` sidecars from `header.codex.toml`
   (`allow-implicit-invocation`), and `spawn-agent = false` opt-out support.
 - opencode `tui.json` output (TUI settings and keybindings moved out of
-  `settings.json`), the `/init` command template, and MCP tool denies in
+  `opencode.json`), the `/init` command template, and MCP tool denies in
   the permission map.
 - Behavioural test suites for both API wrappers, the overlay script, and
-  `patch_settings.py`.
+  `patch_agents_md.py`.
 
 ### Fixed
 
+- opencode output now matches the real config locations: global config is
+  emitted as `opencode.json` (read from `~/.config/opencode/opencode.json`)
+  and the global rules as `AGENTS.md` (read from
+  `~/.config/opencode/AGENTS.md`). The previous `settings.json` with a
+  `rules` key was ignored by opencode entirely — `rules` is not a valid
+  config key and `settings.json` is never loaded.
+- README and AGENTS.md copy targets corrected from `~/.opencode/` to
+  `~/.config/opencode/`.
+- `local/patch_settings.py` renamed to `local/patch_agents_md.py` and now
+  patches the `AGENTS.md` rules file instead of the inert `settings.json`
+  `rules` field.
 - Extractor no longer breaks on Nix comments and strings containing braces,
   quoted keys, `lib.mkDefault`-wrapped values, or `''...''` indented strings.
 - Communication rules now load from the real source path

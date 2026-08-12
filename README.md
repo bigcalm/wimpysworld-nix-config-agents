@@ -30,7 +30,7 @@ python3 extract_agent_config.py /path/to/nix-config --output ~/my-configs
 
 | Platform | Contents | Copy to |
 |----------|----------|---------|
-| **opencode** | agents, commands, skills, plugins, settings.json, MCP | `~/.opencode/` |
+| **opencode** | agents, commands, skills, plugins, opencode.json, AGENTS.md, MCP | `~/.config/opencode/` |
 | **claude** | agents, commands, skills, rules/instructions.md, MCP | `~/.claude/` |
 | **codex** | agents (TOML), skills, AGENTS.md, MCP | `~/.codex/` |
 | **pi** | agents, prompts, skills, AGENTS.md, MCP | `~/.pi/agent/` |
@@ -80,15 +80,15 @@ python3 extract_agent_config.py /path/to/nix-config --platform opencode --quiet
 
 This merges `local/opencode/` into the extracted tree, installs `gh-api-safe`
 and `glab-api-safe` (both reviewed copies in `local/opencode/bin/`) to
-`~/.local/bin/`, and patches `settings.json` with personal rules. The script
+`~/.local/bin/`, and patches `AGENTS.md` with personal rules. The script
 is idempotent — safe to run multiple times.
 
 ### 4. Copy to the agent config directory
 
 ```bash
-cp -r _agent_configs_*/opencode/* ~/.opencode/
+cp -r _agent_configs_*/opencode/* ~/.config/opencode/
 # or, with rsync:
-rsync -a _agent_configs_*/opencode/ ~/.opencode/
+rsync -a _agent_configs_*/opencode/ ~/.config/opencode/
 ```
 
 ### 5. Verify
@@ -103,7 +103,7 @@ Both wrappers should be on `$PATH` via `~/.local/bin/`.
 ### One-liner
 
 ```bash
-python3 extract_agent_config.py /path/to/nix-config --platform opencode --quiet && ./apply_local_overlay.sh /path/to/nix-config && rsync -a _agent_configs_*/opencode/ ~/.opencode/
+python3 extract_agent_config.py /path/to/nix-config --platform opencode --quiet && ./apply_local_overlay.sh /path/to/nix-config && rsync -a _agent_configs_*/opencode/ ~/.config/opencode/
 ```
 
 ## Local overlay
@@ -115,7 +115,7 @@ local/
 ├── opencode/
 │   ├── bin/                  # gh-api-safe.sh and glab-api-safe.sh wrappers
 │   └── skills/glab/          # extra skill not in the Nix source
-└── patch_settings.py         # idempotent JSON patch for settings.json rules
+└── patch_agents_md.py        # idempotent patch for AGENTS.md rules
 ```
 
 Both wrappers are reviewed copies living in `local/opencode/bin/` (the

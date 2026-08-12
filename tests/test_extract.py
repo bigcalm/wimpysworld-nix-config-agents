@@ -111,7 +111,7 @@ class TestRenderers(unittest.TestCase):
 
     def test_opencode_output(self):
         out = e.render_opencode(self.tree, self.tmp, quiet=True)
-        settings = json.loads((out / "settings.json").read_text())
+        settings = json.loads((out / "opencode.json").read_text())
 
         self.assertIn("mcp", settings)
         self.assertEqual(settings["mcp"]["context7"]["type"], "remote")
@@ -131,12 +131,18 @@ class TestRenderers(unittest.TestCase):
         self.assertTrue((out / "commands" / "create-skill.md").exists())
         self.assertTrue((out / "skills" / "write-skill" / "SKILL.md").exists())
 
+        # The legacy settings.json must not be emitted alongside opencode.json.
+        self.assertFalse((out / "settings.json").exists())
+        # Global rules ship as AGENTS.md, not as a config `rules` key.
+        self.assertNotIn("rules", settings)
+        self.assertTrue((out / "AGENTS.md").exists())
+
     def test_opencode_tui_and_init(self):
         out = e.render_opencode(self.tree, self.tmp, quiet=True)
-        settings = json.loads((out / "settings.json").read_text())
+        settings = json.loads((out / "opencode.json").read_text())
         tui = json.loads((out / "tui.json").read_text())
 
-        # tui and keybinds moved out of settings.json into tui.json.
+        # tui and keybinds moved out of opencode.json into tui.json.
         self.assertNotIn("tui", settings)
         self.assertNotIn("keybinds", settings)
         self.assertEqual(tui["tui"]["diff_style"], "stacked")
@@ -149,7 +155,7 @@ class TestRenderers(unittest.TestCase):
 
     def test_opencode_permission_denies(self):
         out = e.render_opencode(self.tree, self.tmp, quiet=True)
-        settings = json.loads((out / "settings.json").read_text())
+        settings = json.loads((out / "opencode.json").read_text())
         permission = settings["permission"]
         self.assertEqual(permission["webfetch"], "deny")
         self.assertEqual(permission["slack_slack_send_message"], "deny")
@@ -158,9 +164,11 @@ class TestRenderers(unittest.TestCase):
 
     def test_opencode_rules_carry_house_style(self):
         out = e.render_opencode(self.tree, self.tmp, quiet=True)
-        settings = json.loads((out / "settings.json").read_text())
-        rules = settings["rules"]
-        self.assertTrue(rules.startswith("---"))
+        settings = json.loads((out / "opencode.json").read_text())
+        rules = (out / "AGENTS.md").read_text()
+        # Rules live in AGENTS.md, not in the config file.
+        self.assertNotIn("rules", settings)
+        self.assertNotIn("---", rules.splitlines()[0] if rules.splitlines() else "")
         self.assertEqual(rules.count("short sentences"), 1)
 
     def test_plugin_copy_skips_template_tokens(self):
@@ -314,10 +322,11 @@ class TestFullExtraction(unittest.TestCase):
 
             expected_dirs = {"opencode", "claude", "codex", "pi", "zed", "paseo", "cursor"}
             self.assertEqual(expected_dirs, {p.name for p in out.iterdir() if p.is_dir()})
-            # Settings rules must be non-empty markdown.
-            settings = json.loads((out / "opencode" / "settings.json").read_text())
-            self.assertTrue(settings["rules"].startswith("---"))
-            self.assertGreater(len(settings["rules"]), 100)
+            # Settings rules must be non-empty markdown in AGENTS.md.
+            settings = json.loads((out / "opencode" / "opencode.json").read_text())
+            self.assertNotIn("rules", settings)
+            rules = (out / "opencode" / "AGENTS.md").read_text()
+            self.assertGreater(len(rules), 100)
         finally:
             shutil.rmtree(out)
 

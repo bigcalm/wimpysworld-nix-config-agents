@@ -8,13 +8,13 @@
 # This script:
 #   1. Copies local/opencode/ over the extracted opencode/ tree (rsync merge)
 #   2. Installs gh-api-safe and glab-api-safe from local/opencode/bin/
-#   3. Runs patch_settings.py to inject glab rules into settings.json
+#   3. Runs patch_agents_md.py to inject glab rules into AGENTS.md
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_DIR="${SCRIPT_DIR}/local"
-PATCH_SCRIPT="${LOCAL_DIR}/patch_settings.py"
+PATCH_SCRIPT="${LOCAL_DIR}/patch_agents_md.py"
 
 if [[ $# -lt 1 ]]; then
     echo "apply_local_overlay: missing nix-config path" >&2
@@ -81,8 +81,8 @@ echo "apply_local_overlay: installing bin wrappers to ~/.local/bin/"
 install -Dm755 "${GH_API_SAFE_SRC}" "${HOME}/.local/bin/gh-api-safe"
 install -Dm755 "${GLAB_API_SAFE_SRC}" "${HOME}/.local/bin/glab-api-safe"
 
-# Patch settings.json
-echo "apply_local_overlay: patching settings.json"
+# Patch AGENTS.md rules
+echo "apply_local_overlay: patching AGENTS.md"
 python3 "${PATCH_SCRIPT}" "${OPENCODE_DIR}"
 
 echo "apply_local_overlay: done → ${OPENCODE_DIR}"

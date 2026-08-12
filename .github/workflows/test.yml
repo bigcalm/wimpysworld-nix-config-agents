@@ -51,10 +51,10 @@ jobs:
                   print(f"Parse error in {path}: {exc}")
                   errors += 1
 
-          settings = json.loads(Path("/tmp/extracted/opencode/settings.json").read_text())
-          rules = settings.get("rules", "")
-          if not rules.startswith("---") or len(rules) < 100:
-              print("settings.json rules missing or truncated")
+          settings = json.loads(Path("/tmp/extracted/opencode/opencode.json").read_text())
+          rules = Path("/tmp/extracted/opencode/AGENTS.md").read_text()
+          if not rules or len(rules) < 100:
+              print("opencode AGENTS.md rules missing or truncated")
               errors += 1
 
           # The real tree ships 4 MCP servers; a broken merge that silently
@@ -80,8 +80,8 @@ jobs:
           if len(tui.get("keybinds", {})) < 10:
               print(f"opencode tui.json keybinds missing: {len(tui.get('keybinds', {}))}")
               errors += 1
-          if "tui" in settings or "keybinds" in settings:
-              print("opencode settings.json must not carry tui/keybinds")
+          if "tui" in settings or "keybinds" in settings or "rules" in settings:
+              print("opencode opencode.json must not carry tui/keybinds/rules")
               errors += 1
 
           # Codex config.toml carries the MCP servers and model settings.
@@ -109,7 +109,7 @@ jobs:
       - name: Syntax-check overlay scripts and wrappers
         run: |
           bash -n apply_local_overlay.sh
-          python3 -m py_compile local/patch_settings.py
+          python3 -m py_compile local/patch_agents_md.py
           bash -n local/opencode/bin/glab-api-safe.sh
           bash -n local/opencode/bin/gh-api-safe.sh
 
@@ -127,11 +127,12 @@ jobs:
           import json
           from pathlib import Path
 
-          settings = json.loads(Path("/tmp/extracted/opencode/settings.json").read_text())
-          rules = settings["rules"]
+          settings = json.loads(Path("/tmp/extracted/opencode/opencode.json").read_text())
+          rules = Path("/tmp/extracted/opencode/AGENTS.md").read_text()
           # Applied exactly once: the gitlab fence marker appears one time.
           assert rules.count("Keep GitLab mutations on named, authorised paths.") == 1, rules
           assert "For GitLab, load the `glab` skill" in rules
+          assert "rules" not in settings
           assert Path("/tmp/extracted/opencode/skills/glab/SKILL.md").exists()
           # Wrappers installed to the HOME-overridden PATH dir.
           assert Path("/tmp/ovl-home/.local/bin/glab-api-safe").is_file()

@@ -52,7 +52,7 @@ local/
 ├── opencode/
 │   ├── bin/                  # gh-api-safe.sh and glab-api-safe.sh wrappers
 │   └── skills/glab/          # extra skill not in the Nix source
-└── patch_settings.py         # idempotent JSON patch for settings.json rules
+└── patch_agents_md.py        # idempotent patch for AGENTS.md rules
 ```
 
 Both wrappers are reviewed copies living in `local/opencode/bin/` (the

@@ -38,7 +38,7 @@ smoke-tested against stubs. CHANGELOG, AGENTS.md, and README updated.
 - Paseo content assertions; opencode keybinds/init assertions; plugin copy and `@token@` skip.
 - CI smoke asserts server counts, oauth client_id, keybinds.
 - Fixture: `zed.mode = "skip"` -> real mode; fixture uses the real house-style path.
-- `patch_settings.py` drift-refusal and overlay error-path tests.
+- `patch_agents_md.py` drift-refusal and overlay error-path tests.
 - Extractor tests for every Phase B change.
 
 ## Phase D - Verify and document

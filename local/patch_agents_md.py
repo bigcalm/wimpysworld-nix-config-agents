@@ -1,37 +1,35 @@
 #!/usr/bin/env python3
 """
-Patch opencode/settings.json with local rules additions.
+Patch opencode/AGENTS.md with local rules additions.
 
 This script merges the glab skill references and GitLab fence policy into
-the rules field of the extracted settings.json. It is idempotent: running
-it multiple times produces the same result.
+the global rules file opencode reads from ~/.config/opencode/AGENTS.md.
+It is idempotent: running it multiple times produces the same result.
 
 Usage:
-    python3 patch_settings.py <path-to-opencode-output-dir>
+    python3 patch_agents_md.py <path-to-opencode-output-dir>
 """
 
-import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 
-def patch_settings(opencode_dir: Path):
-    settings_path = opencode_dir / "settings.json"
-    if not settings_path.exists():
-        print(f"patch_settings: {settings_path} not found", file=sys.stderr)
+def patch_agents_md(opencode_dir: Path):
+    agents_path = opencode_dir / "AGENTS.md"
+    if not agents_path.exists():
+        print(f"patch_agents_md: {agents_path} not found", file=sys.stderr)
         sys.exit(1)
 
-    with open(settings_path) as f:
-        settings = json.load(f)
-
-    rules = settings.get("rules", "")
+    rules = agents_path.read_text(encoding="utf-8")
 
     # Check if already patched (both markers must be present)
     if (
         "For GitLab, load the `glab` skill" in rules
         and "Keep GitLab mutations on named, authorised paths." in rules
     ):
-        print("patch_settings: rules already contain glab references, skipping")
+        print("patch_agents_md: AGENTS.md already contains glab references, skipping")
         return
 
     # Find the GitHub paragraph and append GitLab equivalents
@@ -39,7 +37,7 @@ def patch_settings(opencode_dir: Path):
     github_fence_line = "Keep GitHub mutations on named, authorised paths."
 
     if github_tool_line not in rules or github_fence_line not in rules:
-        print("patch_settings: expected GitHub rules paragraphs not found", file=sys.stderr)
+        print("patch_agents_md: expected GitHub rules paragraphs not found", file=sys.stderr)
         sys.exit(1)
 
     # Replace the tool line to mention both
@@ -56,8 +54,8 @@ def patch_settings(opencode_dir: Path):
     patched_tool = rules.replace(old_tool, new_tool)
     if patched_tool == rules:
         print(
-            "patch_settings: GitHub tool paragraph drifted from expected wording; "
-            "refusing to patch silently. Update old_tool in patch_settings.py.",
+            "patch_agents_md: GitHub tool paragraph drifted from expected wording; "
+            "refusing to patch silently. Update old_tool in patch_agents_md.py.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -83,17 +81,25 @@ def patch_settings(opencode_dir: Path):
 
     rules = rules[:next_section] + gitlab_fence + rules[next_section:]
 
-    settings["rules"] = rules
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        dir=str(agents_path.parent), prefix=".AGENTS-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(rules)
+        os.replace(tmp_name, agents_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
-    with open(settings_path, "w") as f:
-        json.dump(settings, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-
-    print("patch_settings: applied glab rules to settings.json")
+    print("patch_agents_md: applied glab rules to AGENTS.md")
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} <opencode-output-dir>", file=sys.stderr)
         sys.exit(1)
-    patch_settings(Path(sys.argv[1]))
+    patch_agents_md(Path(sys.argv[1]))
